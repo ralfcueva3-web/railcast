@@ -45,33 +45,24 @@ app = FastAPI(
 
 
 # ---------------------------------------------------------
-# Authentication middleware
+# JWT middleware FIRST
 # ---------------------------------------------------------
-# Add JWT first so CORS is the outermost middleware.
+# CORS must be added AFTER this middleware so that CORS
+# becomes the outermost middleware and can add CORS headers
+# even when authentication returns an error.
 app.add_middleware(JWTAuthMiddleware)
 
 
 # ---------------------------------------------------------
-# CORS
+# CORS middleware LAST = outermost middleware
 # ---------------------------------------------------------
-default_origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://railcast-xi.vercel.app",
-    "https://railcast-git-main-ralf-cueva-s-projects.vercel.app",
-]
-
-env_origins = [
-    origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", "").split(",")
-    if origin.strip()
-]
-
-allowed_origins = list(dict.fromkeys(default_origins + env_origins))
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=[
+        "https://railcast-xi.vercel.app",
+        "https://railcast-git-main-ralf-cueva-s-projects.vercel.app",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -95,11 +86,9 @@ async def health():
     redis_ok = await app.state.redis.ping()
 
     return HealthResponse(
-        status=(
-            "ok"
-            if db_ok and redis_ok and predictor.ready
-            else "degraded"
-        ),
+        status="ok"
+        if db_ok and redis_ok and predictor.ready
+        else "degraded",
         database="up" if db_ok else "down",
         redis="up" if redis_ok else "down",
         models="ready" if predictor.ready else "missing",
@@ -112,15 +101,9 @@ async def health():
 @app.post("/auth/token", response_model=TokenResponse)
 async def token(username: str, password: str):
     expected_user = os.getenv("AUTH_USERNAME", "railcast")
-    expected_password = os.getenv(
-        "AUTH_PASSWORD",
-        "railcast-demo",
-    )
+    expected_password = os.getenv("AUTH_PASSWORD", "railcast-demo")
 
-    if (
-        username != expected_user
-        or password != expected_password
-    ):
+    if username != expected_user or password != expected_password:
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials",
@@ -138,7 +121,7 @@ async def token(username: str, password: str):
     )
 
     return TokenResponse(
-        access_token=access_token
+        access_token=access_token,
     )
 
 
