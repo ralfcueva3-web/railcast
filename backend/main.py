@@ -53,18 +53,30 @@ app = FastAPI(
 app.add_middleware(JWTAuthMiddleware)
 
 
-# ---------------------------------------------------------
-# CORS middleware LAST = outermost middleware
-# ---------------------------------------------------------
+# =========================================================
+# CORS
+# =========================================================
+
 app.add_middleware(
     CORSMiddleware,
+
     allow_origins=[
+        # Local development
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+
+        # Vercel production
         "https://railcast-xi.vercel.app",
         "https://railcast-git-main-ralf-cueva-s-projects.vercel.app",
     ],
+
+    # Allow Vercel preview deployments.
     allow_origin_regex=r"https://.*\.vercel\.app",
+
     allow_credentials=True,
+
     allow_methods=["*"],
+
     allow_headers=["*"],
 )
 

@@ -5,9 +5,14 @@ import re
 class NTESService:
 
     def __init__(self):
+        # Keep NTES integration, but fail fast.
+        #
+        # Railway currently cannot establish TCP connection
+        # to enquiry.indianrail.gov.in:443. The old configuration
+        # could therefore make requests hang for several minutes.
         self.client = NTESClient(
-            timeout=15,
-            retries=3,
+            timeout=8,
+            retries=1,
         )
 
     # =========================================================
@@ -43,13 +48,13 @@ class NTESService:
 
                 return hours * 60 + minutes
 
-            except ValueError:
+            except (ValueError, TypeError):
                 return 0
 
         try:
             return float(value)
 
-        except ValueError:
+        except (ValueError, TypeError):
             return 0
 
     # =========================================================
@@ -73,7 +78,7 @@ class NTESService:
         route,
     ):
         """
-        Extract the station from NTES CPOS.
+        Extract a route station from NTES CPOS.
 
         Example:
 
@@ -83,8 +88,7 @@ class NTESService:
 
             MFA
 
-        CPOS is useful because LSTN can sometimes remain
-        stale while the train is already moving.
+        CPOS is preferred because LSTN can sometimes remain stale.
         """
 
         if not cpos:
@@ -93,8 +97,7 @@ class NTESService:
         cpos_text = str(cpos).strip()
 
         # -----------------------------------------------------
-        # First try the station code inside brackets.
-        #
+        # Try station code inside brackets.
         # Example:
         # MUKURIA(MFA)
         # -----------------------------------------------------
@@ -117,7 +120,6 @@ class NTESService:
                 )
 
                 if station_code == code:
-
                     return station
 
         # -----------------------------------------------------
@@ -136,10 +138,40 @@ class NTESService:
                 continue
 
             if station_name.lower() in cpos_lower:
-
                 return station
 
         return None
+
+    # =========================================================
+    # NTES ERROR MESSAGE
+    # =========================================================
+
+    @staticmethod
+    def _format_ntes_error(error):
+        """
+        Produce a short useful error message for API responses.
+        """
+
+        error_text = str(error).strip()
+
+        if not error_text:
+            return "NTES request failed"
+
+        if "timed out" in error_text.lower():
+            return (
+                "NTES connection timed out. "
+                "The Railway backend cannot currently reach "
+                "the NTES server."
+            )
+
+        if "connection" in error_text.lower():
+            return (
+                "NTES connection failed. "
+                "The Railway backend cannot currently reach "
+                "the NTES server."
+            )
+
+        return f"NTES request failed: {error_text}"
 
     # =========================================================
     # STATION LIVE TRAINS
@@ -152,12 +184,41 @@ class NTESService:
     ):
         """
         Get multiple live trains associated with a station.
+
+        Important:
+        NTES failures are raised quickly so FastAPI does not
+        remain stuck for several minutes.
         """
 
-        response = self.client.station_live(
-            station_code,
-            hours=hours,
+        station_code = self._clean_code(
+            station_code
         )
+
+        try:
+
+            response = self.client.station_live(
+                station_code,
+                hours=hours,
+            )
+
+        except Exception as error:
+
+            print(
+                "\nRAILCAST NTES STATION ERROR"
+            )
+            print(
+                "Station:",
+                station_code,
+            )
+            print(
+                "Error:",
+                self._format_ntes_error(error),
+            )
+
+            # Re-raise so the FastAPI router can return 502.
+            raise RuntimeError(
+                self._format_ntes_error(error)
+            ) from error
 
         trains = response.get(
             "TrainsAtStation",
@@ -181,8 +242,10 @@ class NTESService:
             "trains": [
 
                 {
-                    "train_no": train.get(
-                        "TrainNumber"
+                    "train_no": str(
+                        train.get(
+                            "TrainNumber"
+                        ) or ""
                     ),
 
                     "train_name": train.get(
@@ -270,10 +333,38 @@ class NTESService:
         Get detailed live status for a train.
         """
 
-        return self.client.live_status(
-            train_no,
-            date,
-        )
+        train_no = str(
+            train_no
+        ).strip()
+
+        try:
+
+            return self.client.live_status(
+                train_no,
+                date,
+            )
+
+        except Exception as error:
+
+            print(
+                "\nRAILCAST NTES TRAIN STATUS ERROR"
+            )
+            print(
+                "Train:",
+                train_no,
+            )
+            print(
+                "Date:",
+                date,
+            )
+            print(
+                "Error:",
+                self._format_ntes_error(error),
+            )
+
+            raise RuntimeError(
+                self._format_ntes_error(error)
+            ) from error
 
     # =========================================================
     # TRAIN ROUTE
@@ -295,19 +386,44 @@ class NTESService:
         4. Use ISA.
         5. Use latest visited station.
         6. Use source station.
-
-        CPOS is deliberately checked before LSTN because
-        NTES can sometimes leave LSTN stale.
         """
+
+        train_no = str(
+            train_no
+        ).strip()
 
         # -----------------------------------------------------
         # GET NTES LIVE STATUS
         # -----------------------------------------------------
 
-        response = self.client.live_status(
-            train_no,
-            date,
-        )
+        try:
+
+            response = self.client.live_status(
+                train_no,
+                date,
+            )
+
+        except Exception as error:
+
+            print(
+                "\nRAILCAST NTES ROUTE ERROR"
+            )
+            print(
+                "Train:",
+                train_no,
+            )
+            print(
+                "Date:",
+                date,
+            )
+            print(
+                "Error:",
+                self._format_ntes_error(error),
+            )
+
+            raise RuntimeError(
+                self._format_ntes_error(error)
+            ) from error
 
         # -----------------------------------------------------
         # DEBUG NTES LIVE VALUES
@@ -329,6 +445,7 @@ class NTESService:
             "STNS",
             [],
         ):
+
             print(
                 station.get("SC"),
                 "|",
@@ -358,8 +475,8 @@ class NTESService:
 
             route.append(
                 {
-                    "station_code": station.get(
-                        "SC"
+                    "station_code": self._clean_code(
+                        station.get("SC")
                     ),
 
                     "station_name": station.get(
@@ -391,15 +508,11 @@ class NTESService:
                     ),
 
                     "arrival_delay": self._parse_delay(
-                        station.get(
-                            "DARR"
-                        )
+                        station.get("DARR")
                     ),
 
                     "departure_delay": self._parse_delay(
-                        station.get(
-                            "DDEP"
-                        )
+                        station.get("DDEP")
                     ),
 
                     "is_current": station.get(
@@ -435,9 +548,7 @@ class NTESService:
                 ),
 
                 "delay": self._parse_delay(
-                    response.get(
-                        "LDEL"
-                    )
+                    response.get("LDEL")
                 ),
 
                 "yet_to_start": False,
@@ -492,13 +603,8 @@ class NTESService:
             for station in route
 
             if (
-                station.get(
-                    "actual_arrival"
-                )
-                or
-                station.get(
-                    "actual_departure"
-                )
+                station.get("actual_arrival")
+                or station.get("actual_departure")
             )
 
         ]
@@ -512,15 +618,11 @@ class NTESService:
         # -----------------------------------------------------
 
         reported_current = self._clean_code(
-            response.get(
-                "LSTN"
-            )
+            response.get("LSTN")
         )
 
         reported_current_name = str(
-            response.get(
-                "LSTNN"
-            ) or ""
+            response.get("LSTNN") or ""
         ).strip()
 
         # -----------------------------------------------------
@@ -546,7 +648,7 @@ class NTESService:
 
         print(
             "  CPOS:",
-            cpos
+            cpos,
         )
 
         print(
@@ -555,45 +657,32 @@ class NTESService:
                 cpos_station.get("station_code")
                 if cpos_station
                 else None
-            )
+            ),
         )
 
         print(
             "  LSTN:",
-            reported_current
+            reported_current,
         )
 
         print(
             "  LSTNN:",
-            reported_current_name
+            reported_current_name,
         )
 
         print(
             "  ISA current flag:",
-            has_current_flag
+            has_current_flag,
         )
 
         print(
             "  Has visited station:",
-            has_visited_station
+            has_visited_station,
         )
 
         # -----------------------------------------------------
         # DETECT YET-TO-START
         # -----------------------------------------------------
-
-        """
-        NTES sometimes reports the destination as LSTN
-        before the train has actually departed.
-
-        If the destination is reported while there is:
-
-        - no current ISA flag
-        - no actual movement
-        - no usable CPOS station
-
-        then treat the train as pre-departure.
-        """
 
         not_started = (
             reported_current == last_code
@@ -618,10 +707,11 @@ class NTESService:
         if not_started:
 
             current_station = first_code
-
             current_station_name = first_name
 
-            decision = "SOURCE - TRAIN NOT STARTED"
+            decision = (
+                "SOURCE - TRAIN NOT STARTED"
+            )
 
         # -----------------------------------------------------
         # CASE 2:
@@ -652,16 +742,12 @@ class NTESService:
         elif (
             reported_current
             and any(
-
                 self._clean_code(
                     station.get(
                         "station_code"
                     )
-                )
-                == reported_current
-
+                ) == reported_current
                 for station in route
-
             )
         ):
 
@@ -710,7 +796,9 @@ class NTESService:
 
             else:
 
-                decision = "SOURCE FALLBACK"
+                decision = (
+                    "SOURCE FALLBACK"
+                )
 
         # -----------------------------------------------------
         # CASE 5:
@@ -733,7 +821,9 @@ class NTESService:
                 ) or ""
             ).strip()
 
-            decision = "LATEST VISITED"
+            decision = (
+                "LATEST VISITED"
+            )
 
         # -----------------------------------------------------
         # CASE 6:
@@ -743,10 +833,11 @@ class NTESService:
         else:
 
             current_station = first_code
-
             current_station_name = first_name
 
-            decision = "SOURCE FALLBACK"
+            decision = (
+                "SOURCE FALLBACK"
+            )
 
         # -----------------------------------------------------
         # FINAL DEBUG RESULT
@@ -754,17 +845,17 @@ class NTESService:
 
         print(
             "  CURRENT-STATION DECISION:",
-            decision
+            decision,
         )
 
         print(
             "  FINAL CURRENT STATION:",
-            current_station
+            current_station,
         )
 
         print(
             "  FINAL CURRENT NAME:",
-            current_station_name
+            current_station_name,
         )
 
         # -----------------------------------------------------
@@ -795,12 +886,12 @@ class NTESService:
 
         print(
             "  NTES DELAY:",
-            ntes_delay
+            ntes_delay,
         )
 
         print(
             "  EFFECTIVE DELAY:",
-            effective_delay
+            effective_delay,
         )
 
         print(
@@ -812,7 +903,6 @@ class NTESService:
         # -----------------------------------------------------
 
         return {
-
             "train_no": train_no,
 
             "destination": response.get(
@@ -841,5 +931,4 @@ class NTESService:
                 not_started,
 
             "route": route,
-
         }

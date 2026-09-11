@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+    useEffect,
+    useState,
+} from "react";
 
 import {
     getETA,
@@ -7,7 +10,16 @@ import {
     getTrainRoute,
 } from "../api/trainApi";
 
-import type { ETAResponse } from "../types";
+import type {
+    ETAResponse,
+    ETAPrediction,
+} from "../types";
+
+import type {
+    StationTrain,
+    StationTrainsResponse,
+} from "../api/trainApi";
+
 import { stations } from "../data/route";
 
 import ETACard from "../components/ETACard";
@@ -15,16 +27,23 @@ import StationTimeline from "../components/StationTimeline";
 import TrainMap from "../components/TrainMap";
 import MLInsightCard from "../components/MLInsightCard";
 
+
 export default function PassengerView() {
+
     // =========================================================
     // STATION STATE
     // =========================================================
 
-    const [stationInput, setStationInput] = useState("");
-    const [selectedStation, setSelectedStation] = useState("");
+    const [stationInput, setStationInput] =
+        useState("");
+
+    const [selectedStation, setSelectedStation] =
+        useState("");
 
     const [stationData, setStationData] =
-        useState<any>(null);
+        useState<StationTrainsResponse | null>(
+            null
+        );
 
     // =========================================================
     // TRAIN STATE
@@ -67,6 +86,7 @@ export default function PassengerView() {
     // =========================================================
 
     const getTodayNTESDate = () => {
+
         const now = new Date();
 
         const months = [
@@ -84,10 +104,11 @@ export default function PassengerView() {
             "Dec",
         ];
 
-        return `${String(now.getDate()).padStart(
-            2,
-            "0"
-        )}-${months[now.getMonth()]}-${now.getFullYear()}`;
+        return `${String(
+            now.getDate()
+        ).padStart(2, "0")}-${months[
+        now.getMonth()
+        ]}-${now.getFullYear()}`;
     };
 
     // =========================================================
@@ -95,12 +116,16 @@ export default function PassengerView() {
     // =========================================================
 
     const updateLastUpdated = () => {
+
         setLastUpdated(
-            new Date().toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-            })
+            new Date().toLocaleTimeString(
+                [],
+                {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                }
+            )
         );
     };
 
@@ -109,6 +134,7 @@ export default function PassengerView() {
     // =========================================================
 
     useEffect(() => {
+
         if (!selectedStation) {
             return;
         }
@@ -116,6 +142,7 @@ export default function PassengerView() {
         let cancelled = false;
 
         const loadStation = async () => {
+
             setLoadingStation(true);
 
             setSelectedTrain(null);
@@ -125,6 +152,7 @@ export default function PassengerView() {
             setPayload(null);
 
             try {
+
                 const data =
                     await getStationTrains(
                         selectedStation
@@ -140,8 +168,11 @@ export default function PassengerView() {
                 );
 
                 setStationData(data);
+
                 updateLastUpdated();
+
             } catch (error) {
+
                 if (cancelled) {
                     return;
                 }
@@ -158,7 +189,9 @@ export default function PassengerView() {
                         ? error.message
                         : "Failed to load station data"
                 );
+
             } finally {
+
                 if (!cancelled) {
                     setLoadingStation(false);
                 }
@@ -170,6 +203,7 @@ export default function PassengerView() {
         return () => {
             cancelled = true;
         };
+
     }, [selectedStation]);
 
     // =========================================================
@@ -177,37 +211,44 @@ export default function PassengerView() {
     // =========================================================
 
     useEffect(() => {
+
         if (!selectedStation) {
             return;
         }
 
         let cancelled = false;
 
-        const refreshStationBoard = async () => {
-            try {
-                const data =
-                    await getStationTrains(
-                        selectedStation
+        const refreshStationBoard =
+            async () => {
+
+                try {
+
+                    const data =
+                        await getStationTrains(
+                            selectedStation
+                        );
+
+                    if (cancelled) {
+                        return;
+                    }
+
+                    console.log(
+                        "AUTO REFRESH STATION BOARD:",
+                        data
                     );
 
-                if (cancelled) {
-                    return;
+                    setStationData(data);
+
+                    updateLastUpdated();
+
+                } catch (error) {
+
+                    console.error(
+                        "Automatic station refresh failed:",
+                        error
+                    );
                 }
-
-                console.log(
-                    "AUTO REFRESH STATION BOARD:",
-                    data
-                );
-
-                setStationData(data);
-                updateLastUpdated();
-            } catch (error) {
-                console.error(
-                    "Automatic station refresh failed:",
-                    error
-                );
-            }
-        };
+            };
 
         const intervalId =
             window.setInterval(
@@ -216,9 +257,14 @@ export default function PassengerView() {
             );
 
         return () => {
+
             cancelled = true;
-            window.clearInterval(intervalId);
+
+            window.clearInterval(
+                intervalId
+            );
         };
+
     }, [selectedStation]);
 
     // =========================================================
@@ -226,6 +272,7 @@ export default function PassengerView() {
     // =========================================================
 
     const handleStationSearch = () => {
+
         const code =
             stationInput
                 .trim()
@@ -241,33 +288,41 @@ export default function PassengerView() {
     const handleStationKeyDown = (
         event: React.KeyboardEvent<HTMLInputElement>
     ) => {
+
         if (event.key === "Enter") {
             handleStationSearch();
         }
     };
 
-    // =========================================================
-    // CURRENT STATION HELPER
-    // =========================================================
-
     const getCorrectCurrentStation = (
         routeData: any,
         statusData: any
     ): string => {
+
+        // =====================================================
+        // ROUTE DATA
+        // =====================================================
+
         const routeStations =
-            routeData?.route || [];
+            Array.isArray(routeData?.route)
+                ? routeData.route
+                : [];
 
         const normalizedRoute =
             routeStations.map(
                 (station: any) => ({
                     code: String(
-                        station?.station_code || ""
+                        station?.station_code ||
+                        station?.code ||
+                        ""
                     )
                         .trim()
                         .toUpperCase(),
 
                     name: String(
-                        station?.station_name || ""
+                        station?.station_name ||
+                        station?.name ||
+                        ""
                     ).trim(),
                 })
             );
@@ -275,26 +330,9 @@ export default function PassengerView() {
         const firstCode =
             normalizedRoute[0]?.code || "";
 
-        const cpos =
-            String(
-                statusData?.CPOS || ""
-            ).trim();
-
-        let cposCode = "";
-
-        if (cpos) {
-            const match =
-                cpos.match(
-                    /\(([A-Za-z0-9]{2,6})\)/
-                );
-
-            if (match) {
-                cposCode =
-                    String(match[1])
-                        .trim()
-                        .toUpperCase();
-            }
-        }
+        // =====================================================
+        // TRAIN NOT STARTED
+        // =====================================================
 
         const statusText = [
             statusData?.CPOS,
@@ -307,16 +345,8 @@ export default function PassengerView() {
             .toLowerCase();
 
         const notStarted =
-            statusText.includes(
-                "yet to start"
-            ) ||
-            statusText.includes(
-                "not started"
-            );
-
-        // ---------------------------------------------------------
-        // 1. TRAIN NOT STARTED
-        // ---------------------------------------------------------
+            statusText.includes("yet to start") ||
+            statusText.includes("not started");
 
         if (
             notStarted &&
@@ -325,21 +355,71 @@ export default function PassengerView() {
             return firstCode;
         }
 
-        // ---------------------------------------------------------
-        // 2. CPOS IS AUTHORITATIVE
-        // ---------------------------------------------------------
+        // =====================================================
+        // 1. BACKEND CURRENT STATION
+        // =====================================================
+        //
+        // IMPORTANT:
+        // The backend has already processed NTES data.
+        // Prefer its normalized current_station value.
+        //
 
-        if (cposCode) {
-            return cposCode;
+        const backendCurrent =
+            String(
+                routeData?.current_station ||
+                ""
+            )
+                .trim()
+                .toUpperCase();
+
+        if (backendCurrent) {
+            return backendCurrent;
         }
 
-        // ---------------------------------------------------------
+        // =====================================================
+        // 2. CPOS
+        // =====================================================
+        //
+        // CPOS can contain the most recent physical position.
+        // Use it only when backend current_station is unavailable.
+        //
+
+        const cpos =
+            String(
+                statusData?.CPOS ||
+                ""
+            ).trim();
+
+        if (cpos) {
+
+            const match =
+                cpos.match(
+                    /\(([A-Za-z0-9]{2,6})\)/
+                );
+
+            if (match?.[1]) {
+
+                const cposCode =
+                    String(
+                        match[1]
+                    )
+                        .trim()
+                        .toUpperCase();
+
+                if (cposCode) {
+                    return cposCode;
+                }
+            }
+        }
+
+        // =====================================================
         // 3. LSTN
-        // ---------------------------------------------------------
+        // =====================================================
 
         const lstn =
             String(
-                statusData?.LSTN || ""
+                statusData?.LSTN ||
+                ""
             )
                 .trim()
                 .toUpperCase();
@@ -354,9 +434,9 @@ export default function PassengerView() {
             return lstn;
         }
 
-        // ---------------------------------------------------------
+        // =====================================================
         // 4. ISA
-        // ---------------------------------------------------------
+        // =====================================================
 
         const currentFlagStation =
             routeStations.find(
@@ -365,9 +445,11 @@ export default function PassengerView() {
             );
 
         if (currentFlagStation) {
+
             const code =
                 String(
-                    currentFlagStation.station_code ||
+                    currentFlagStation?.station_code ||
+                    currentFlagStation?.code ||
                     ""
                 )
                     .trim()
@@ -378,9 +460,9 @@ export default function PassengerView() {
             }
         }
 
-        // ---------------------------------------------------------
-        // 5. LATEST VISITED
-        // ---------------------------------------------------------
+        // =====================================================
+        // 5. LATEST VISITED STATION
+        // =====================================================
 
         const visitedStations =
             routeStations.filter(
@@ -392,14 +474,17 @@ export default function PassengerView() {
         if (
             visitedStations.length > 0
         ) {
+
             const latest =
                 visitedStations[
-                    visitedStations.length - 1
+                visitedStations.length - 1
                 ];
 
             const code =
                 String(
-                    latest?.station_code || ""
+                    latest?.station_code ||
+                    latest?.code ||
+                    ""
                 )
                     .trim()
                     .toUpperCase();
@@ -409,26 +494,15 @@ export default function PassengerView() {
             }
         }
 
-        // ---------------------------------------------------------
-        // 6. ROUTE CURRENT
-        // ---------------------------------------------------------
+        // =====================================================
+        // 6. SELECTED STATION FALLBACK
+        // =====================================================
 
-        const routeCurrent =
-            String(
-                routeData?.current_station || ""
-            )
-                .trim()
-                .toUpperCase();
-
-        if (routeCurrent) {
-            return routeCurrent;
-        }
-
-        // ---------------------------------------------------------
-        // 7. FALLBACK
-        // ---------------------------------------------------------
-
-        return selectedStation;
+        return String(
+            selectedStation || ""
+        )
+            .trim()
+            .toUpperCase();
     };
 
     // =========================================================
@@ -439,6 +513,7 @@ export default function PassengerView() {
         cpos: string,
         code: string
     ): string => {
+
         if (!cpos || !code) {
             return "";
         }
@@ -453,9 +528,7 @@ export default function PassengerView() {
         }
 
         const extractedCode =
-            String(
-                match[2] || ""
-            )
+            String(match[2] || "")
                 .trim()
                 .toUpperCase();
 
@@ -476,14 +549,17 @@ export default function PassengerView() {
     // =========================================================
 
     const handleTrainClick = async (
-        train: any
+        train: StationTrain
     ) => {
+
         const trainNumber =
             String(
                 train.train_no
-            )
-                .trim()
-                .padStart(5, "0");
+            ).trim();
+
+        if (!trainNumber) {
+            return;
+        }
 
         setSelectedTrain(
             trainNumber
@@ -497,12 +573,13 @@ export default function PassengerView() {
         setLoadingTrain(true);
 
         try {
+
             const today =
                 getTodayNTESDate();
 
-            // -----------------------------------------------------
-            // GET LIVE STATUS
-            // -----------------------------------------------------
+            // -------------------------------------------------
+            // LIVE STATUS
+            // -------------------------------------------------
 
             const status =
                 await getTrainStatus(
@@ -515,9 +592,9 @@ export default function PassengerView() {
                 status
             );
 
-            // -----------------------------------------------------
-            // GET ROUTE
-            // -----------------------------------------------------
+            // -------------------------------------------------
+            // ROUTE
+            // -------------------------------------------------
 
             const route =
                 await getTrainRoute(
@@ -530,9 +607,9 @@ export default function PassengerView() {
                 route
             );
 
-            // -----------------------------------------------------
-            // GET CURRENT STATION
-            // -----------------------------------------------------
+            // -------------------------------------------------
+            // CURRENT STATION
+            // -------------------------------------------------
 
             const currentStation =
                 getCorrectCurrentStation(
@@ -545,18 +622,18 @@ export default function PassengerView() {
                 currentStation
             );
 
-            // -----------------------------------------------------
-            // GET RailDrishri ETA
-            // -----------------------------------------------------
+            // -------------------------------------------------
+            // RAILDRISHRI ETA
+            // -------------------------------------------------
 
             const eta =
                 await getETA(
-                    Number(trainNumber),
+                    trainNumber,
                     currentStation
                 );
 
             console.log(
-                "RailDrishti ETA:",
+                "RailDrishri ETA:",
                 eta
             );
 
@@ -577,7 +654,9 @@ export default function PassengerView() {
             );
 
             updateLastUpdated();
+
         } catch (error) {
+
             console.error(
                 "Selected train request failed:",
                 error
@@ -590,7 +669,9 @@ export default function PassengerView() {
                     ? error.message
                     : "Failed to fetch live train data"
             );
+
         } finally {
+
             setLoadingTrain(false);
         }
     };
@@ -600,6 +681,7 @@ export default function PassengerView() {
     // =========================================================
 
     useEffect(() => {
+
         if (!selectedTrain) {
             return;
         }
@@ -608,7 +690,9 @@ export default function PassengerView() {
 
         const refreshSelectedTrain =
             async () => {
+
                 try {
+
                     const today =
                         getTodayNTESDate();
 
@@ -640,9 +724,7 @@ export default function PassengerView() {
 
                     const eta =
                         await getETA(
-                            Number(
-                                selectedTrain
-                            ),
+                            selectedTrain,
                             currentStation
                         );
 
@@ -677,7 +759,9 @@ export default function PassengerView() {
                     );
 
                     updateLastUpdated();
+
                 } catch (error) {
+
                     console.error(
                         "Automatic train refresh failed:",
                         error
@@ -692,32 +776,24 @@ export default function PassengerView() {
             );
 
         return () => {
+
             cancelled = true;
+
             window.clearInterval(
                 intervalId
             );
         };
+
     }, [selectedTrain]);
 
     // =========================================================
     // AUTHORITATIVE CURRENT STATION
     // =========================================================
 
-    /*
-     * IMPORTANT:
-     *
-     * The backend now returns:
-     *
-     * payload.current_station
-     *
-     * which comes from NTES CPOS.
-     *
-     * Therefore this MUST be the first source.
-     */
-
     const current =
         String(
             payload?.current_station ||
+            selectedTrainRoute?.current_station ||
             ""
         )
             .trim()
@@ -747,7 +823,8 @@ export default function PassengerView() {
         routeStations.find(
             (station: any) =>
                 String(
-                    station?.station_code || ""
+                    station?.station_code ||
+                    ""
                 )
                     .trim()
                     .toUpperCase() ===
@@ -787,7 +864,8 @@ export default function PassengerView() {
         routeStations.findIndex(
             (station: any) =>
                 String(
-                    station?.station_code || ""
+                    station?.station_code ||
+                    ""
                 )
                     .trim()
                     .toUpperCase() ===
@@ -841,57 +919,36 @@ export default function PassengerView() {
     // NEXT STATION
     // =========================================================
 
-    /*
-     * Case A:
-     *
-     * Current station is a scheduled station.
-     */
-
     let nextStationIndex = -1;
 
     if (
         currentRouteIndex >= 0
     ) {
+
         nextStationIndex =
             currentRouteIndex + 1;
-    }
 
-    /*
-     * Case B:
-     *
-     * Current station is a CPOS physical location
-     * between scheduled stations.
-     *
-     * Use first unvisited scheduled station.
-     */
-
-    else if (
+    } else if (
         firstUnvisitedIndex >= 0
     ) {
+
         nextStationIndex =
             firstUnvisitedIndex;
-    }
 
-    /*
-     * Case C:
-     *
-     * Fall back to the station after the latest
-     * visited scheduled station.
-     */
-
-    else if (
+    } else if (
         latestVisitedIndex >= 0
     ) {
+
         nextStationIndex =
             latestVisitedIndex + 1;
     }
 
     const nextRouteStation =
         nextStationIndex >= 0 &&
-        nextStationIndex <
+            nextStationIndex <
             routeStations.length
             ? routeStations[
-                nextStationIndex
+            nextStationIndex
             ]
             : null;
 
@@ -902,7 +959,7 @@ export default function PassengerView() {
     const destinationRouteStation =
         routeStations.length > 0
             ? routeStations[
-                routeStations.length - 1
+            routeStations.length - 1
             ]
             : null;
 
@@ -921,29 +978,19 @@ export default function PassengerView() {
 
     let currentDistance = 0;
 
-    /*
-     * If current CPOS is a scheduled station,
-     * use its actual route distance.
-     */
-
     if (
         currentRouteIndex >= 0
     ) {
+
         currentDistance =
             Number(
                 routeStations[
                     currentRouteIndex
                 ]?.distance || 0
             );
-    }
 
-    /*
-     * If CPOS is NOT a scheduled station,
-     * estimate its position between the previous
-     * and next scheduled stops.
-     */
+    } else {
 
-    else {
         const nextIndex =
             nextStationIndex;
 
@@ -956,8 +1003,9 @@ export default function PassengerView() {
             previousIndex >= 0 &&
             nextIndex >= 0 &&
             nextIndex <
-                routeStations.length
+            routeStations.length
         ) {
+
             const previousDistance =
                 Number(
                     routeStations[
@@ -973,13 +1021,6 @@ export default function PassengerView() {
                     previousDistance
                 );
 
-            /*
-             * CPOS is between these two stops.
-             *
-             * We use 50% of the segment because NTES
-             * does not provide exact kilometer position.
-             */
-
             currentDistance =
                 previousDistance +
                 (
@@ -987,9 +1028,11 @@ export default function PassengerView() {
                     previousDistance
                 ) *
                 0.5;
+
         } else if (
             latestVisitedIndex >= 0
         ) {
+
             currentDistance =
                 Number(
                     routeStations[
@@ -1027,7 +1070,7 @@ export default function PassengerView() {
     const lastPrediction =
         predictions.length > 0
             ? predictions[
-                predictions.length - 1
+            predictions.length - 1
             ]
             : null;
 
@@ -1077,7 +1120,7 @@ export default function PassengerView() {
             ? "Delay is expected to increase further."
             : finalPredictionDelay <
                 currentDelay - 2
-                ? "RailDrishti expects the delay to reduce ahead."
+                ? "RailDrishri expects the delay to reduce ahead."
                 : "Delay is expected to remain broadly stable.";
 
     const statusExplanation =
@@ -1127,7 +1170,7 @@ export default function PassengerView() {
             ? delayChange > 2
                 ? `The train is already running ${Math.round(
                     currentDelay
-                )} min late. RailDrishti expects part of this delay to propagate through downstream segments, increasing the projected delay by around ${Math.round(
+                )} min late. RailDrishri expects part of this delay to propagate through downstream segments, increasing the projected delay by around ${Math.round(
                     delayChange
                 )} min.`
                 : delayChange < -2
@@ -1153,10 +1196,9 @@ export default function PassengerView() {
             : "Current upstream delay: minimal",
 
         predictions.length > 0
-            ? `Predicted downstream change: ${
-                delayChange >= 0
-                    ? "+"
-                    : ""
+            ? `Predicted downstream change: ${delayChange >= 0
+                ? "+"
+                : ""
             }${Math.round(
                 delayChange
             )} min`
@@ -1168,11 +1210,29 @@ export default function PassengerView() {
     ];
 
     // =========================================================
+    // DATA SOURCE LABEL
+    // =========================================================
+
+    const dataSource =
+        stationData?.data_source ||
+        "NTES_LIVE";
+
+    const dataSourceLabel =
+        dataSource === "NTES_LIVE"
+            ? "NTES LIVE"
+            : dataSource === "REDIS_CACHE"
+                ? "CACHED"
+                : dataSource === "DEMO_FALLBACK"
+                    ? "DEMO"
+                    : "UNAVAILABLE";
+
+    // =========================================================
     // RENDER
     // =========================================================
 
     return (
         <main className="min-h-screen bg-[#08080F] px-4 py-5 text-white">
+
             <div className="mx-auto max-w-lg space-y-4">
 
                 {/* =====================================================
@@ -1180,23 +1240,26 @@ export default function PassengerView() {
                 ===================================================== */}
 
                 <header className="flex items-center justify-between">
+
                     <div>
+
                         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-blue-400">
                             RailDrishri
                         </p>
 
                         <h1 className="mt-1 text-xl font-semibold">
                             {selectedTrain
-                                ? `${selectedTrain} ${
-                                    selectedTrainStatus?.TNM ||
-                                    selectedTrainStatus?.TRAIN_NAME ||
-                                    "Selected Train"
+                                ? `${selectedTrain} ${selectedTrainStatus?.TNM ||
+                                selectedTrainStatus?.TRAIN_NAME ||
+                                "Selected Train"
                                 }`
                                 : "Live Railway Intelligence"}
                         </h1>
+
                     </div>
 
                     <div className="text-right">
+
                         <span className="inline-flex rounded-full bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300">
                             ● Live
                         </span>
@@ -1206,7 +1269,9 @@ export default function PassengerView() {
                                 Updated {lastUpdated}
                             </p>
                         )}
+
                     </div>
+
                 </header>
 
                 {/* =====================================================
@@ -1214,11 +1279,13 @@ export default function PassengerView() {
                 ===================================================== */}
 
                 <section className="rounded-3xl border border-blue-400/20 bg-[#12121d] p-5">
+
                     <p className="text-xs uppercase tracking-widest text-white/40">
                         Search station
                     </p>
 
                     <div className="mt-3 flex gap-2">
+
                         <input
                             type="text"
                             value={stationInput}
@@ -1250,6 +1317,7 @@ export default function PassengerView() {
                                 ? "..."
                                 : "Search"}
                         </button>
+
                     </div>
 
                     <p className="mt-2 text-xs text-white/30">
@@ -1263,6 +1331,7 @@ export default function PassengerView() {
                                 {selectedStation}
                             </p>
                         )}
+
                 </section>
 
                 {/* =====================================================
@@ -1271,18 +1340,41 @@ export default function PassengerView() {
 
                 {stationData && (
                     <section className="rounded-3xl border border-white/10 bg-[#12121d] p-5">
-                        <p className="text-xs uppercase tracking-widest text-white/40">
-                            Selected station
-                        </p>
 
-                        <p className="mt-2 text-2xl font-semibold">
-                            {stationData.station_name ||
-                                selectedStation}
-                        </p>
+                        <div className="flex items-start justify-between gap-3">
 
-                        <p className="mt-1 text-sm text-white/45">
-                            {stationData.total_trains} live trains
-                        </p>
+                            <div>
+
+                                <p className="text-xs uppercase tracking-widest text-white/40">
+                                    Selected station
+                                </p>
+
+                                <p className="mt-2 text-2xl font-semibold">
+                                    {stationData.station_name ||
+                                        selectedStation}
+                                </p>
+
+                                <p className="mt-1 text-sm text-white/45">
+                                    {stationData.total_trains} live trains
+                                </p>
+
+                            </div>
+
+                            <span
+                                className={`rounded-full px-3 py-1 text-[10px] font-semibold ${dataSource ===
+                                    "NTES_LIVE"
+                                    ? "bg-emerald-400/10 text-emerald-300"
+                                    : dataSource ===
+                                        "REDIS_CACHE"
+                                        ? "bg-amber-400/10 text-amber-300"
+                                        : "bg-blue-400/10 text-blue-300"
+                                    }`}
+                            >
+                                {dataSourceLabel}
+                            </span>
+
+                        </div>
+
                     </section>
                 )}
 
@@ -1292,8 +1384,11 @@ export default function PassengerView() {
 
                 {stationData && (
                     <section className="rounded-3xl border border-white/10 bg-[#12121d] p-5">
+
                         <div className="mb-4 flex items-center justify-between">
+
                             <div>
+
                                 <p className="text-xs uppercase tracking-widest text-white/40">
                                     Live station board
                                 </p>
@@ -1301,110 +1396,126 @@ export default function PassengerView() {
                                 <h2 className="mt-1 text-lg font-semibold">
                                     {stationData.station_name}
                                 </h2>
+
                             </div>
 
                             <span className="text-xs text-white/40">
                                 {stationData.total_trains} trains
                             </span>
+
                         </div>
 
                         <div className="space-y-3">
+
                             {stationData.trains?.map(
-                                (train: any) => {
+                                (
+                                    train: StationTrain
+                                ) => {
+
                                     const trainNumber =
                                         String(
                                             train.train_no
-                                        )
-                                            .trim()
-                                            .padStart(
-                                                5,
-                                                "0"
-                                            );
+                                        ).trim();
+
+                                    const isSelected =
+                                        selectedTrain ===
+                                        trainNumber;
+
+                                    const arrivalDelay =
+                                        Number(
+                                            train.arrival_delay ||
+                                            0
+                                        );
 
                                     return (
                                         <button
-                                            key={
-                                                trainNumber
-                                            }
+                                            key={`${trainNumber}-${train.eta}-${train.etd}`}
                                             type="button"
                                             onClick={() =>
                                                 handleTrainClick(
                                                     train
                                                 )
                                             }
-                                            className={`w-full cursor-pointer rounded-2xl border p-4 text-left transition hover:bg-white/[0.06] ${
-                                                selectedTrain ===
-                                                trainNumber
-                                                    ? "border-blue-400/50 bg-blue-400/10"
-                                                    : "border-white/10 bg-[#0f0f18]"
-                                            }`}
+                                            className={`w-full cursor-pointer rounded-2xl border p-4 text-left transition ${isSelected
+                                                ? "border-blue-400/50 bg-blue-400/10"
+                                                : "border-white/10 bg-[#0f0f18] hover:bg-white/[0.06]"
+                                                }`}
                                         >
-                                            <div className="flex items-start justify-between">
-                                                <div>
-                                                    <p className="font-semibold">
-                                                        {
-                                                            trainNumber
-                                                        }
+
+                                            <div className="flex items-start justify-between gap-3">
+
+                                                <div className="min-w-0">
+
+                                                    <p className="truncate font-semibold">
+                                                        {trainNumber}
                                                         {" — "}
-                                                        {
-                                                            train.train_name
-                                                        }
+                                                        {train.train_name ||
+                                                            "Unknown train"}
                                                     </p>
 
-                                                    <p className="mt-1 text-xs text-white/40">
-                                                        {
-                                                            train.source_name
-                                                        }
+                                                    <p className="mt-1 truncate text-xs text-white/40">
+                                                        {train.source_name ||
+                                                            train.source ||
+                                                            "—"}
                                                         {" → "}
-                                                        {
-                                                            train.destination_name
-                                                        }
+                                                        {train.destination_name ||
+                                                            train.destination ||
+                                                            "—"}
                                                     </p>
+
                                                 </div>
 
-                                                <div className="text-right">
+                                                <div className="shrink-0 text-right">
+
                                                     <p className="text-lg font-semibold">
-                                                        {
-                                                            train.eta
-                                                        }
+                                                        {train.eta ||
+                                                            train.etd ||
+                                                            "—"}
                                                     </p>
 
                                                     <p className="text-xs text-white/40">
                                                         Platform{" "}
-                                                        {
-                                                            train.platform ||
-                                                            "—"
-                                                        }
+                                                        {train.platform ||
+                                                            "—"}
                                                     </p>
+
                                                 </div>
+
                                             </div>
 
-                                            <div className="mt-3 flex items-center justify-between text-xs">
-                                                <span className="text-white/40">
-                                                    {
-                                                        train.train_type
-                                                    }
+                                            <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+
+                                                <span className="truncate text-white/40">
+                                                    {train.train_type ||
+                                                        "TRAIN"}
                                                 </span>
 
                                                 <span
                                                     className={
-                                                        train.arrival_delay >
-                                                        0
-                                                            ? "text-amber-300"
-                                                            : "text-emerald-300"
+                                                        arrivalDelay >
+                                                            15
+                                                            ? "shrink-0 text-red-300"
+                                                            : arrivalDelay >
+                                                                0
+                                                                ? "shrink-0 text-amber-300"
+                                                                : "shrink-0 text-emerald-300"
                                                     }
                                                 >
-                                                    {train.arrival_delay >
-                                                    0
-                                                        ? `${train.arrival_delay} min late`
+                                                    {arrivalDelay >
+                                                        0
+                                                        ? `${arrivalDelay} min late`
                                                         : "On time"}
                                                 </span>
+
                                             </div>
+
                                         </button>
                                     );
                                 }
                             )}
+
                         </div>
+
                     </section>
                 )}
 
@@ -1414,63 +1525,85 @@ export default function PassengerView() {
 
                 {selectedTrain && (
                     <section className="rounded-2xl border border-blue-400/20 bg-blue-400/10 p-4">
-                        <p className="text-xs uppercase tracking-widest text-blue-300">
-                            Selected train
-                        </p>
 
-                        <p className="mt-1 text-lg font-semibold">
-                            {selectedTrain}
-                        </p>
+                        <div className="flex items-start justify-between">
+
+                            <div>
+
+                                <p className="text-xs uppercase tracking-widest text-blue-300">
+                                    Selected train
+                                </p>
+
+                                <p className="mt-1 text-lg font-semibold">
+                                    {selectedTrain}
+                                </p>
+
+                            </div>
+
+                            {loadingTrain && (
+                                <span className="text-xs text-blue-300">
+                                    Updating...
+                                </span>
+                            )}
+
+                        </div>
 
                         {selectedTrainError ? (
+
                             <p className="mt-3 text-sm text-red-400">
                                 {selectedTrainError}
                             </p>
+
                         ) : loadingTrain ? (
+
                             <p className="mt-3 text-sm text-white/40">
                                 Fetching live train status and RailDrishri prediction…
                             </p>
+
                         ) : selectedTrainStatus ? (
+
                             <div className="mt-3 space-y-3 text-sm text-white/60">
 
                                 <p>
                                     Route:{" "}
                                     <span className="text-white">
                                         {
-                                            selectedTrainStatus.SRCN
+                                            selectedTrainStatus.SRCN ||
+                                            selectedTrainStatus.SRC ||
+                                            "—"
                                         }
                                         {" → "}
                                         {
-                                            selectedTrainStatus.DSTNN
+                                            selectedTrainStatus.DSTNN ||
+                                            "—"
                                         }
                                     </span>
                                 </p>
 
                                 {/* CURRENT STATION */}
+
                                 <div className="rounded-2xl border border-blue-400/20 bg-blue-400/10 p-4">
+
                                     <p className="text-[10px] uppercase tracking-widest text-blue-300">
                                         Current station
                                     </p>
 
                                     <p className="mt-1 text-xl font-semibold text-white">
-                                        {
-                                            currentStationName
-                                        }
+                                        {currentStationName}
                                     </p>
 
                                     <p className="mt-1 text-xs text-blue-300/70">
                                         {current}
                                     </p>
+
                                 </div>
 
                                 <p>
                                     Delay:{" "}
                                     <span className="text-white">
-                                        {
-                                            selectedTrainStatus.LDEL ??
-                                            currentDelay ??
-                                            0
-                                        }{" "}
+                                        {Math.round(
+                                            currentDelay
+                                        )}{" "}
                                         min
                                     </span>
                                 </p>
@@ -1495,8 +1628,11 @@ export default function PassengerView() {
                                         </span>
                                     </p>
                                 )}
+
                             </div>
+
                         ) : null}
+
                     </section>
                 )}
 
@@ -1536,20 +1672,21 @@ export default function PassengerView() {
                         <section className="rounded-3xl border border-white/10 bg-[#12121d] p-5">
 
                             <div className="flex items-center justify-between">
+
                                 <div>
+
                                     <p className="text-xs uppercase tracking-widest text-white/40">
                                         Journey progress
                                     </p>
 
                                     <p className="mt-2 text-lg font-semibold text-white">
-                                        {
-                                            currentStationName
-                                        }
+                                        {currentStationName}
                                     </p>
 
                                     <p className="mt-1 text-xs text-white/35">
                                         {current}
                                     </p>
+
                                 </div>
 
                                 <p className="text-2xl font-bold text-blue-400">
@@ -1558,18 +1695,22 @@ export default function PassengerView() {
                                     )}
                                     %
                                 </p>
+
                             </div>
 
                             <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
+
                                 <div
                                     className="h-full rounded-full bg-blue-400 transition-all duration-500"
                                     style={{
                                         width: `${journeyProgress}%`,
                                     }}
                                 />
+
                             </div>
 
                             <div className="mt-2 flex justify-between text-xs text-white/40">
+
                                 <span>
                                     {Math.round(
                                         currentDistance
@@ -1583,10 +1724,12 @@ export default function PassengerView() {
                                     )}{" "}
                                     km total
                                 </span>
+
                             </div>
 
                             {nextRouteStation && (
                                 <div className="mt-4 rounded-2xl bg-[#0f0f18] p-3">
+
                                     <p className="text-[10px] uppercase tracking-widest text-white/30">
                                         Next scheduled station
                                     </p>
@@ -1602,8 +1745,10 @@ export default function PassengerView() {
                                             nextRouteStation.station_code
                                         }
                                     </p>
+
                                 </div>
                             )}
+
                         </section>
                     )}
 
@@ -1616,7 +1761,9 @@ export default function PassengerView() {
                         <section className="rounded-3xl border border-blue-400/20 bg-[#12121d] p-5">
 
                             <div className="flex items-start justify-between">
+
                                 <div>
+
                                     <p className="text-xs uppercase tracking-[0.2em] text-white/40">
                                         Next station
                                     </p>
@@ -1632,17 +1779,22 @@ export default function PassengerView() {
                                             nextRouteStation.station_code
                                         }
                                     </p>
+
                                 </div>
 
                                 <span className="rounded-full bg-blue-400/10 px-3 py-1 text-xs font-medium text-blue-300">
                                     LIVE
                                 </span>
+
                             </div>
 
                             {(() => {
+
                                 const nextPrediction =
                                     predictions.find(
-                                        (prediction: any) =>
+                                        (
+                                            prediction: ETAPrediction
+                                        ) =>
                                             String(
                                                 prediction?.station?.code ||
                                                 ""
@@ -1660,11 +1812,14 @@ export default function PassengerView() {
                                 if (
                                     !nextPrediction
                                 ) {
+
                                     return (
                                         <div className="mt-5 rounded-2xl bg-[#0f0f18] p-4">
+
                                             <p className="text-sm text-white/40">
                                                 RailDrishri prediction for the next station is currently unavailable.
                                             </p>
+
                                         </div>
                                     );
                                 }
@@ -1677,12 +1832,15 @@ export default function PassengerView() {
 
                                 return (
                                     <div className="mt-5">
+
                                         <div className="rounded-2xl bg-[#0f0f18] p-4">
+
                                             <p className="text-xs uppercase tracking-widest text-white/30">
                                                 Expected arrival
                                             </p>
 
                                             <div className="mt-2 flex items-end justify-between">
+
                                                 <p className="text-3xl font-bold text-white">
                                                     {new Date(
                                                         nextPrediction.eta
@@ -1698,7 +1856,7 @@ export default function PassengerView() {
                                                 <span
                                                     className={
                                                         nextDelay >
-                                                        15
+                                                            15
                                                             ? "rounded-full bg-red-400/10 px-3 py-1 text-xs text-red-300"
                                                             : nextDelay >
                                                                 5
@@ -1707,7 +1865,7 @@ export default function PassengerView() {
                                                     }
                                                 >
                                                     {nextDelay >
-                                                    0
+                                                        0
                                                         ? `+${Math.round(
                                                             nextDelay
                                                         )} min`
@@ -1718,11 +1876,15 @@ export default function PassengerView() {
                                                             )} min`
                                                             : "On time"}
                                                 </span>
+
                                             </div>
+
                                         </div>
 
                                         <div className="mt-3 grid grid-cols-2 gap-3">
+
                                             <div className="rounded-2xl bg-[#0f0f18] p-4">
+
                                                 <p className="text-xs uppercase tracking-widest text-white/30">
                                                     Status
                                                 </p>
@@ -1730,7 +1892,7 @@ export default function PassengerView() {
                                                 <p className="mt-2 text-sm font-semibold text-white">
                                                     {
                                                         nextPrediction.status ===
-                                                        "late"
+                                                            "late"
                                                             ? "Late"
                                                             : nextPrediction.status ===
                                                                 "delayed"
@@ -1741,9 +1903,11 @@ export default function PassengerView() {
                                                                     : "On time"
                                                     }
                                                 </p>
+
                                             </div>
 
                                             <div className="rounded-2xl bg-[#0f0f18] p-4">
+
                                                 <p className="text-xs uppercase tracking-widest text-white/30">
                                                     Prediction range
                                                 </p>
@@ -1753,11 +1917,16 @@ export default function PassengerView() {
                                                         ? `${nextPrediction.confidence.width_minutes} min`
                                                         : "—"}
                                                 </p>
+
                                             </div>
+
                                         </div>
+
                                     </div>
                                 );
+
                             })()}
+
                         </section>
                     )}
 
@@ -1770,7 +1939,9 @@ export default function PassengerView() {
                         <section className="rounded-3xl border border-white/10 bg-[#12121d] p-5">
 
                             <div className="flex items-start justify-between gap-4">
+
                                 <div>
+
                                     <p className="text-xs uppercase tracking-[0.2em] text-white/40">
                                         RailDrishri status intelligence
                                     </p>
@@ -1783,7 +1954,7 @@ export default function PassengerView() {
 
                                     <p className="mt-1 text-sm text-white/45">
                                         {currentDelay >
-                                        0
+                                            0
                                             ? `${Math.round(
                                                 currentDelay
                                             )} min behind schedule`
@@ -1796,11 +1967,13 @@ export default function PassengerView() {
                                                 )} min ahead of schedule`
                                                 : "Operating on schedule"}
                                     </p>
+
                                 </div>
 
                                 <span className="rounded-full bg-blue-400/10 px-3 py-1 text-xs text-blue-300">
                                     AI
                                 </span>
+
                             </div>
 
                             {/* CURRENT / NEXT / DESTINATION */}
@@ -1808,6 +1981,7 @@ export default function PassengerView() {
                             <div className="mt-5 grid grid-cols-3 gap-2">
 
                                 <div className="rounded-2xl border border-blue-400/20 bg-blue-400/10 p-3">
+
                                     <p className="text-[10px] uppercase tracking-widest text-blue-300">
                                         Current
                                     </p>
@@ -1821,9 +1995,11 @@ export default function PassengerView() {
                                     <p className="mt-1 text-[10px] text-blue-300/60">
                                         {current}
                                     </p>
+
                                 </div>
 
                                 <div className="rounded-2xl bg-[#0f0f18] p-3">
+
                                     <p className="text-[10px] uppercase tracking-widest text-white/30">
                                         Next
                                     </p>
@@ -1841,9 +2017,11 @@ export default function PassengerView() {
                                             ""
                                         }
                                     </p>
+
                                 </div>
 
                                 <div className="rounded-2xl bg-[#0f0f18] p-3">
+
                                     <p className="text-[10px] uppercase tracking-widest text-white/30">
                                         Destination
                                     </p>
@@ -1862,6 +2040,7 @@ export default function PassengerView() {
                                             ""
                                         }
                                     </p>
+
                                 </div>
 
                             </div>
@@ -1869,6 +2048,7 @@ export default function PassengerView() {
                             {/* DELAY OUTLOOK */}
 
                             <div className="mt-4 rounded-2xl border border-white/5 bg-[#0f0f18] p-4">
+
                                 <p className="text-xs uppercase tracking-widest text-white/30">
                                     Delay outlook
                                 </p>
@@ -1881,19 +2061,23 @@ export default function PassengerView() {
 
                                 {predictions.length >
                                     0 && (
-                                    <div className="mt-3 flex items-center justify-between border-t border-white/5 pt-3">
-                                        <span className="text-xs text-white/35">
-                                            Projected delay range
-                                        </span>
+                                        <div className="mt-3 flex items-center justify-between border-t border-white/5 pt-3">
 
-                                        <span className="text-sm font-semibold text-blue-300">
-                                            {
-                                                predictionRangeText
-                                            }
-                                        </span>
-                                    </div>
-                                )}
+                                            <span className="text-xs text-white/35">
+                                                Projected delay range
+                                            </span>
+
+                                            <span className="text-sm font-semibold text-blue-300">
+                                                {
+                                                    predictionRangeText
+                                                }
+                                            </span>
+
+                                        </div>
+                                    )}
+
                             </div>
+
                         </section>
                     )}
 
@@ -1905,7 +2089,9 @@ export default function PassengerView() {
                     <section className="rounded-3xl border border-blue-400/20 bg-[#12121d] p-5">
 
                         <div className="flex items-start justify-between gap-4">
+
                             <div>
+
                                 <p className="text-xs uppercase tracking-[0.2em] text-white/40">
                                     Why this prediction?
                                 </p>
@@ -1913,27 +2099,31 @@ export default function PassengerView() {
                                 <h2 className="mt-2 text-xl font-semibold text-white">
                                     RailDrishri ML reasoning
                                 </h2>
+
                             </div>
 
                             <span className="rounded-full bg-blue-400/10 px-3 py-1 text-xs text-blue-300">
                                 AI
                             </span>
+
                         </div>
 
                         <div className="mt-4 rounded-2xl bg-[#0f0f18] p-4">
+
                             <p className="text-sm leading-6 text-white/70">
-                                {
-                                    mlExplanation
-                                }
+                                {mlExplanation}
                             </p>
+
                         </div>
 
                         <div className="mt-4">
+
                             <p className="text-xs uppercase tracking-widest text-white/30">
                                 Prediction factors
                             </p>
 
                             <div className="mt-3 space-y-2">
+
                                 {mlFactors.map(
                                     (
                                         factor,
@@ -1945,6 +2135,7 @@ export default function PassengerView() {
                                             }
                                             className="flex items-center gap-3 rounded-xl bg-[#0f0f18] px-3 py-3"
                                         >
+
                                             <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-400/10 text-[10px] text-blue-300">
                                                 {
                                                     index +
@@ -1957,13 +2148,17 @@ export default function PassengerView() {
                                                     factor
                                                 }
                                             </span>
+
                                         </div>
                                     )
                                 )}
+
                             </div>
+
                         </div>
 
                         <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
+
                             <span className="text-xs text-white/35">
                                 Ensemble confidence
                             </span>
@@ -1974,7 +2169,9 @@ export default function PassengerView() {
                                 )}
                                 %
                             </span>
+
                         </div>
+
                     </section>
                 )}
 
@@ -2000,10 +2197,11 @@ export default function PassengerView() {
 
                 {payload &&
                     displayStations.length >
-                        0 && (
+                    0 && (
                         <section className="rounded-3xl border border-white/10 bg-[#0f0f18] p-5">
 
                             <div className="mb-5 flex justify-between">
+
                                 <h2 className="font-semibold">
                                     Stations ahead
                                 </h2>
@@ -2011,6 +2209,7 @@ export default function PassengerView() {
                                 <span className="text-xs text-white/40">
                                     RailDrishri prediction
                                 </span>
+
                             </div>
 
                             <StationTimeline
@@ -2024,16 +2223,17 @@ export default function PassengerView() {
                                     current
                                 }
                                 trainStarted={
-                                    selectedTrainRoute
-                                        ? selectedTrainRoute.yet_to_start ===
-                                          false
+                                    selectedTrainRoute?.yet_to_start === true
+                                        ? false
                                         : true
                                 }
                             />
+
                         </section>
                     )}
 
             </div>
+
         </main>
     );
 }
