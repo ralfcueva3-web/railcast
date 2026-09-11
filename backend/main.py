@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 
 import jwt
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -44,27 +45,33 @@ app = FastAPI(
 
 
 # ---------------------------------------------------------
+# Authentication middleware
+# ---------------------------------------------------------
+# Add JWT first so CORS is the outermost middleware.
+app.add_middleware(JWTAuthMiddleware)
+
+
+# ---------------------------------------------------------
 # CORS
 # ---------------------------------------------------------
-
-origins = [
+default_origins = [
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
     "https://railcast-xi.vercel.app",
     "https://railcast-git-main-ralf-cueva-s-projects.vercel.app",
 ]
 
-extra_origins = os.getenv("CORS_ORIGINS", "")
+env_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
 
-if extra_origins:
-    origins.extend(
-        x.strip()
-        for x in extra_origins.split(",")
-        if x.strip()
-    )
+allowed_origins = list(dict.fromkeys(default_origins + env_origins))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,16 +79,8 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------
-# Authentication middleware
-# ---------------------------------------------------------
-
-app.add_middleware(JWTAuthMiddleware)
-
-
-# ---------------------------------------------------------
 # Routers
 # ---------------------------------------------------------
-
 app.include_router(eta_router)
 app.include_router(live_router)
 app.include_router(ntes.router)
@@ -90,16 +89,17 @@ app.include_router(ntes.router)
 # ---------------------------------------------------------
 # Health
 # ---------------------------------------------------------
-
 @app.get("/health", response_model=HealthResponse)
 async def health():
     db_ok = await app.state.db.ping() if app.state.db else False
     redis_ok = await app.state.redis.ping()
 
     return HealthResponse(
-        status="ok"
-        if db_ok and redis_ok and predictor.ready
-        else "degraded",
+        status=(
+            "ok"
+            if db_ok and redis_ok and predictor.ready
+            else "degraded"
+        ),
         database="up" if db_ok else "down",
         redis="up" if redis_ok else "down",
         models="ready" if predictor.ready else "missing",
@@ -109,13 +109,18 @@ async def health():
 # ---------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------
-
 @app.post("/auth/token", response_model=TokenResponse)
 async def token(username: str, password: str):
     expected_user = os.getenv("AUTH_USERNAME", "railcast")
-    expected_password = os.getenv("AUTH_PASSWORD", "railcast-demo")
+    expected_password = os.getenv(
+        "AUTH_PASSWORD",
+        "railcast-demo",
+    )
 
-    if username != expected_user or password != expected_password:
+    if (
+        username != expected_user
+        or password != expected_password
+    ):
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials",
@@ -140,7 +145,6 @@ async def token(username: str, password: str):
 # ---------------------------------------------------------
 # Root
 # ---------------------------------------------------------
-
 @app.get("/")
 async def root():
     return {
