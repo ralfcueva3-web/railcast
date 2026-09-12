@@ -1,6 +1,9 @@
 import {
     useEffect,
+    useMemo,
     useState,
+    type ChangeEvent,
+    type KeyboardEvent,
 } from "react";
 
 import {
@@ -10,43 +13,257 @@ import {
     getTrainRoute,
 } from "../api/trainApi";
 
-import type {
-    ETAResponse,
-    ETAPrediction,
-} from "../types";
+import type { ETAResponse } from "../types";
 
-import type {
-    StationTrain,
-    StationTrainsResponse,
-} from "../api/trainApi";
+// =============================================================
+// TYPES
+// =============================================================
 
-import { stations } from "../data/route";
+type StationOption = {
+    code: string;
+    name: string;
+};
 
-import ETACard from "../components/ETACard";
-import StationTimeline from "../components/StationTimeline";
-import TrainMap from "../components/TrainMap";
-import MLInsightCard from "../components/MLInsightCard";
+type MobileTab = "board" | "details";
 
+// =============================================================
+// STATIONS
+// =============================================================
+
+const STATION_OPTIONS: StationOption[] = [
+    { code: "HWH", name: "Howrah Jn" },
+    { code: "NJP", name: "New Jalpaiguri" },
+    { code: "RPH", name: "Rampur Hat" },
+    { code: "SNT", name: "Sainthia Jn" },
+    { code: "BHP", name: "Bolpur Shantiniketan" },
+    { code: "SDAH", name: "Sealdah" },
+    { code: "BWN", name: "Barddhaman" },
+    { code: "BDC", name: "Bandel Jn" },
+    { code: "NDLS", name: "New Delhi" },
+];
+
+// =============================================================
+// HELPERS
+// =============================================================
+
+function normalizeTrainNumber(value: unknown): string {
+    return String(value ?? "")
+        .trim()
+        .padStart(5, "0");
+}
+
+function safeString(value: unknown): string {
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return "";
+    }
+
+    return String(value).trim();
+}
+
+function getTodayNTESDate(): string {
+    const now = new Date();
+
+    const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    ];
+
+    return `${String(now.getDate()).padStart(2, "0")}-${months[now.getMonth()]}-${now.getFullYear()}`;
+}
+
+function formatClock(
+    value?: string | null,
+): string {
+    if (!value) {
+        return "—";
+    }
+
+    const raw = String(value);
+
+    if (
+        /^\d{1,2}:\d{2}$/.test(
+            raw,
+        )
+    ) {
+        return raw;
+    }
+
+    try {
+        const date = new Date(raw);
+
+        if (
+            !Number.isNaN(
+                date.getTime(),
+            )
+        ) {
+            return date.toLocaleTimeString(
+                [],
+                {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                },
+            );
+        }
+    } catch {
+        // Ignore.
+    }
+
+    return raw;
+}
+
+function formatDelay(
+    value: unknown,
+): string {
+    const delay = Number(
+        value ?? 0,
+    );
+
+    if (!Number.isFinite(delay)) {
+        return "On time";
+    }
+
+    if (delay > 0) {
+        return `+${Math.round(delay)}m`;
+    }
+
+    if (delay < 0) {
+        return `${Math.round(delay)}m`;
+    }
+
+    return "On time";
+}
+
+function delayClass(
+    value: unknown,
+): string {
+    const delay = Number(
+        value ?? 0,
+    );
+
+    if (delay > 15) {
+        return "text-rose-500";
+    }
+
+    if (delay > 5) {
+        return "text-amber-500";
+    }
+
+    if (delay < -2) {
+        return "text-cyan-600";
+    }
+
+    return "text-emerald-600";
+}
+
+function delayBadgeClass(
+    value: unknown,
+): string {
+    const delay = Number(
+        value ?? 0,
+    );
+
+    if (delay > 15) {
+        return "border-rose-200 bg-rose-50 text-rose-600";
+    }
+
+    if (delay > 5) {
+        return "border-amber-200 bg-amber-50 text-amber-600";
+    }
+
+    if (delay < -2) {
+        return "border-cyan-200 bg-cyan-50 text-cyan-600";
+    }
+
+    return "border-emerald-200 bg-emerald-50 text-emerald-600";
+}
+
+function delayLabel(
+    value: unknown,
+): string {
+    const delay = Number(
+        value ?? 0,
+    );
+
+    if (delay > 15) {
+        return "Major delay";
+    }
+
+    if (delay > 5) {
+        return "Running late";
+    }
+
+    if (delay < -2) {
+        return "Running early";
+    }
+
+    return "On schedule";
+}
+
+function getStationName(
+    code: string,
+    stationData?: any,
+): string {
+    if (
+        stationData?.station_name
+    ) {
+        return stationData.station_name;
+    }
+
+    const station =
+        STATION_OPTIONS.find(
+            (item) =>
+                item.code.toUpperCase() ===
+                code.toUpperCase(),
+        );
+
+    return (
+        station?.name ??
+        code
+    );
+}
+
+// =============================================================
+// COMPONENT
+// =============================================================
 
 export default function PassengerView() {
-
     // =========================================================
-    // STATION STATE
+    // STATION
     // =========================================================
-
-    const [stationInput, setStationInput] =
-        useState("");
 
     const [selectedStation, setSelectedStation] =
         useState("");
 
+    const [stationInput, setStationInput] =
+        useState("");
+
     const [stationData, setStationData] =
-        useState<StationTrainsResponse | null>(
-            null
-        );
+        useState<any>(null);
+
+    const [loadingStation, setLoadingStation] =
+        useState(false);
+
+    const [stationError, setStationError] =
+        useState<string | null>(null);
+
+    const [lastUpdated, setLastUpdated] =
+        useState<string | null>(null);
 
     // =========================================================
-    // TRAIN STATE
+    // TRAIN
     // =========================================================
 
     const [selectedTrain, setSelectedTrain] =
@@ -61,89 +278,73 @@ export default function PassengerView() {
     const [selectedTrainError, setSelectedTrainError] =
         useState<string | null>(null);
 
+    const [loadingTrain, setLoadingTrain] =
+        useState(false);
+
+    const [trainSearch, setTrainSearch] =
+        useState("");
+
+    // =========================================================
+    // ETA
+    // =========================================================
+
     const [payload, setPayload] =
         useState<ETAResponse | null>(null);
 
     // =========================================================
-    // LOADING
+    // MOBILE
     // =========================================================
 
-    const [loadingStation, setLoadingStation] =
-        useState(false);
-
-    const [loadingTrain, setLoadingTrain] =
-        useState(false);
+    const [mobileTab, setMobileTab] =
+        useState<MobileTab>("board");
 
     // =========================================================
-    // LAST UPDATED
+    // STATION SUGGESTIONS
     // =========================================================
 
-    const [lastUpdated, setLastUpdated] =
-        useState<string | null>(null);
+    const stationSuggestions =
+        useMemo(() => {
+            const query =
+                stationInput
+                    .trim()
+                    .toLowerCase();
+
+            if (!query) {
+                return STATION_OPTIONS;
+            }
+
+            return STATION_OPTIONS.filter(
+                (station) =>
+                    station.code
+                        .toLowerCase()
+                        .includes(query) ||
+                    station.name
+                        .toLowerCase()
+                        .includes(query),
+            );
+        }, [
+            stationInput,
+        ]);
 
     // =========================================================
-    // DATE HELPER
+    // LOAD STATION
     // =========================================================
 
-    const getTodayNTESDate = () => {
+    const loadStationBoard =
+        async (
+            stationCode: string,
+        ) => {
+            const code =
+                stationCode
+                    .trim()
+                    .toUpperCase();
 
-        const now = new Date();
-
-        const months = [
-            "Jan",
-            "Feb",
-            "Mar",
-            "Apr",
-            "May",
-            "Jun",
-            "Jul",
-            "Aug",
-            "Sep",
-            "Oct",
-            "Nov",
-            "Dec",
-        ];
-
-        return `${String(
-            now.getDate()
-        ).padStart(2, "0")}-${months[
-        now.getMonth()
-        ]}-${now.getFullYear()}`;
-    };
-
-    // =========================================================
-    // TIME HELPER
-    // =========================================================
-
-    const updateLastUpdated = () => {
-
-        setLastUpdated(
-            new Date().toLocaleTimeString(
-                [],
-                {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                }
-            )
-        );
-    };
-
-    // =========================================================
-    // LOAD STATION BOARD
-    // =========================================================
-
-    useEffect(() => {
-
-        if (!selectedStation) {
-            return;
-        }
-
-        let cancelled = false;
-
-        const loadStation = async () => {
+            if (!code) {
+                return;
+            }
 
             setLoadingStation(true);
+            setStationError(null);
 
             setSelectedTrain(null);
             setSelectedTrainStatus(null);
@@ -152,909 +353,865 @@ export default function PassengerView() {
             setPayload(null);
 
             try {
-
                 const data =
                     await getStationTrains(
-                        selectedStation
+                        code,
                     );
 
-                if (cancelled) {
-                    return;
-                }
-
-                console.log(
-                    "SELECTED STATION DATA:",
-                    data
+                setStationData(
+                    data,
                 );
 
-                setStationData(data);
+                const returnedCode =
+                    safeString(
+                        data?.station ||
+                            code,
+                    ).toUpperCase();
 
-                updateLastUpdated();
+                setSelectedStation(
+                    returnedCode,
+                );
 
+                const returnedName =
+                    getStationName(
+                        returnedCode,
+                        data,
+                    );
+
+                setStationInput(
+                    `${returnedName} (${returnedCode})`,
+                );
+
+                setLastUpdated(
+                    new Date().toLocaleTimeString(
+                        [],
+                        {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                        },
+                    ),
+                );
             } catch (error) {
-
-                if (cancelled) {
-                    return;
-                }
-
                 console.error(
-                    "Failed to load station data:",
-                    error
+                    "Station board request failed:",
+                    error,
                 );
 
-                setStationData(null);
+                setStationData(
+                    null,
+                );
 
-                setSelectedTrainError(
+                setStationError(
                     error instanceof Error
                         ? error.message
-                        : "Failed to load station data"
+                        : "Unable to load station board.",
                 );
-
             } finally {
-
-                if (!cancelled) {
-                    setLoadingStation(false);
-                }
+                setLoadingStation(
+                    false,
+                );
             }
         };
 
-        loadStation();
+    // =========================================================
+    // SELECT STATION
+    // =========================================================
 
-        return () => {
-            cancelled = true;
+    const selectStation =
+        (
+            station: StationOption,
+        ) => {
+            const code =
+                station.code.toUpperCase();
+
+            setSelectedStation(
+                code,
+            );
+
+            setStationInput(
+                `${station.name} (${station.code})`,
+            );
+
+            setSelectedTrain(
+                null,
+            );
+
+            setSelectedTrainStatus(
+                null,
+            );
+
+            setSelectedTrainRoute(
+                null,
+            );
+
+            setSelectedTrainError(
+                null,
+            );
+
+            setPayload(
+                null,
+            );
+
+            void loadStationBoard(
+                code,
+            );
         };
 
-    }, [selectedStation]);
+    // =========================================================
+    // SELECT CHANGE
+    // =========================================================
+
+    const handleStationChange =
+        (
+            event: ChangeEvent<HTMLSelectElement>,
+        ) => {
+            const code =
+                event.target.value
+                    .trim()
+                    .toUpperCase();
+
+            if (!code) {
+                return;
+            }
+
+            const station =
+                STATION_OPTIONS.find(
+                    (item) =>
+                        item.code ===
+                        code,
+                );
+
+            if (station) {
+                selectStation(
+                    station,
+                );
+            }
+        };
 
     // =========================================================
-    // AUTO REFRESH STATION BOARD
+    // STATION SEARCH
+    // =========================================================
+
+    const handleStationSearch =
+        () => {
+            const input =
+                stationInput
+                    .trim()
+                    .toUpperCase();
+
+            if (!input) {
+                return;
+            }
+
+            const codeMatch =
+                input.match(
+                    /\(([A-Z0-9]{2,6})\)/,
+                );
+
+            const code =
+                codeMatch?.[1] ?? "";
+
+            const station =
+                STATION_OPTIONS.find(
+                    (item) =>
+                        item.code ===
+                            input ||
+                        item.code ===
+                            code ||
+                        item.name
+                            .toUpperCase()
+                            .includes(
+                                input,
+                            ),
+                );
+
+            if (station) {
+                selectStation(
+                    station,
+                );
+
+                return;
+            }
+
+            const cleanCode =
+                input
+                    .replace(
+                        /[^A-Z0-9]/g,
+                        "",
+                    )
+                    .slice(
+                        0,
+                        6,
+                    );
+
+            if (cleanCode) {
+                setSelectedStation(
+                    cleanCode,
+                );
+
+                void loadStationBoard(
+                    cleanCode,
+                );
+            }
+        };
+
+    const handleStationKeyDown =
+        (
+            event: KeyboardEvent<HTMLInputElement>,
+        ) => {
+            if (
+                event.key ===
+                "Enter"
+            ) {
+                event.preventDefault();
+
+                handleStationSearch();
+            }
+        };
+
+    // =========================================================
+    // STATION REFRESH
     // =========================================================
 
     useEffect(() => {
-
         if (!selectedStation) {
             return;
         }
 
-        let cancelled = false;
+        let cancelled =
+            false;
 
-        const refreshStationBoard =
+        const refresh =
             async () => {
-
                 try {
-
                     const data =
                         await getStationTrains(
-                            selectedStation
+                            selectedStation,
                         );
 
-                    if (cancelled) {
+                    if (
+                        cancelled
+                    ) {
                         return;
                     }
 
-                    console.log(
-                        "AUTO REFRESH STATION BOARD:",
-                        data
+                    setStationData(
+                        data,
                     );
 
-                    setStationData(data);
+                    const code =
+                        safeString(
+                            data?.station ||
+                                selectedStation,
+                        ).toUpperCase();
 
-                    updateLastUpdated();
-
-                } catch (error) {
-
-                    console.error(
-                        "Automatic station refresh failed:",
-                        error
+                    setSelectedStation(
+                        code,
                     );
+
+                    setStationInput(
+                        `${getStationName(
+                            code,
+                            data,
+                        )} (${code})`,
+                    );
+
+                    setLastUpdated(
+                        new Date().toLocaleTimeString(
+                            [],
+                            {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                            },
+                        ),
+                    );
+                } catch {
+                    // Keep existing data.
                 }
             };
 
-        const intervalId =
+        const interval =
             window.setInterval(
-                refreshStationBoard,
-                60_000
+                refresh,
+                60_000,
             );
 
         return () => {
-
             cancelled = true;
 
             window.clearInterval(
-                intervalId
+                interval,
             );
         };
-
-    }, [selectedStation]);
+    }, [
+        selectedStation,
+    ]);
 
     // =========================================================
-    // SEARCH STATION
+    // CURRENT STATION
     // =========================================================
 
-    const handleStationSearch = () => {
+    const getCurrentStation =
+        (
+            routeData: any,
+            statusData: any,
+        ): string => {
+            const route =
+                Array.isArray(
+                    routeData?.route,
+                )
+                    ? routeData.route
+                    : [];
 
-        const code =
-            stationInput
-                .trim()
-                .toUpperCase();
+            const normalized =
+                route.map(
+                    (
+                        station: any,
+                    ) => ({
+                        code: safeString(
+                            station?.station_code,
+                        ).toUpperCase(),
 
-        if (!code) {
-            return;
-        }
+                        name: safeString(
+                            station?.station_name,
+                        ),
+                    }),
+                );
 
-        setSelectedStation(code);
-    };
+            const first =
+                normalized[0];
 
-    const handleStationKeyDown = (
-        event: React.KeyboardEvent<HTMLInputElement>
-    ) => {
+            const statusText = [
+                statusData?.CPOS,
+                statusData?.STATUS,
+                statusData?.STTS,
+                statusData?.LSTN,
+            ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase();
 
-        if (event.key === "Enter") {
-            handleStationSearch();
-        }
-    };
+            const notStarted =
+                statusText.includes(
+                    "yet to start",
+                ) ||
+                statusText.includes(
+                    "not started",
+                );
 
-    const getCorrectCurrentStation = (
-        routeData: any,
-        statusData: any
-    ): string => {
+            if (
+                notStarted &&
+                first?.code
+            ) {
+                return first.code;
+            }
 
-        // =====================================================
-        // ROUTE DATA
-        // =====================================================
-
-        const routeStations =
-            Array.isArray(routeData?.route)
-                ? routeData.route
-                : [];
-
-        const normalizedRoute =
-            routeStations.map(
-                (station: any) => ({
-                    code: String(
-                        station?.station_code ||
-                        station?.code ||
-                        ""
-                    )
-                        .trim()
-                        .toUpperCase(),
-
-                    name: String(
-                        station?.station_name ||
-                        station?.name ||
-                        ""
-                    ).trim(),
-                })
-            );
-
-        const firstCode =
-            normalizedRoute[0]?.code || "";
-
-        // =====================================================
-        // TRAIN NOT STARTED
-        // =====================================================
-
-        const statusText = [
-            statusData?.CPOS,
-            statusData?.STATUS,
-            statusData?.STTS,
-            statusData?.LSTN,
-        ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase();
-
-        const notStarted =
-            statusText.includes("yet to start") ||
-            statusText.includes("not started");
-
-        if (
-            notStarted &&
-            firstCode
-        ) {
-            return firstCode;
-        }
-
-        // =====================================================
-        // 1. BACKEND CURRENT STATION
-        // =====================================================
-        //
-        // IMPORTANT:
-        // The backend has already processed NTES data.
-        // Prefer its normalized current_station value.
-        //
-
-        const backendCurrent =
-            String(
-                routeData?.current_station ||
-                ""
-            )
-                .trim()
-                .toUpperCase();
-
-        if (backendCurrent) {
-            return backendCurrent;
-        }
-
-        // =====================================================
-        // 2. CPOS
-        // =====================================================
-        //
-        // CPOS can contain the most recent physical position.
-        // Use it only when backend current_station is unavailable.
-        //
-
-        const cpos =
-            String(
-                statusData?.CPOS ||
-                ""
-            ).trim();
-
-        if (cpos) {
+            const cpos =
+                safeString(
+                    statusData?.CPOS,
+                );
 
             const match =
                 cpos.match(
-                    /\(([A-Za-z0-9]{2,6})\)/
+                    /\(([A-Za-z0-9]{2,6})\)/,
                 );
 
-            if (match?.[1]) {
-
-                const cposCode =
-                    String(
-                        match[1]
-                    )
-                        .trim()
-                        .toUpperCase();
-
-                if (cposCode) {
-                    return cposCode;
-                }
-            }
-        }
-
-        // =====================================================
-        // 3. LSTN
-        // =====================================================
-
-        const lstn =
-            String(
-                statusData?.LSTN ||
-                ""
-            )
-                .trim()
-                .toUpperCase();
-
-        if (
-            lstn &&
-            normalizedRoute.some(
-                (station: any) =>
-                    station.code === lstn
-            )
-        ) {
-            return lstn;
-        }
-
-        // =====================================================
-        // 4. ISA
-        // =====================================================
-
-        const currentFlagStation =
-            routeStations.find(
-                (station: any) =>
-                    station?.is_current === true
-            );
-
-        if (currentFlagStation) {
-
-            const code =
-                String(
-                    currentFlagStation?.station_code ||
-                    currentFlagStation?.code ||
-                    ""
-                )
+            if (
+                match?.[1]
+            ) {
+                return match[1]
                     .trim()
                     .toUpperCase();
-
-            if (code) {
-                return code;
             }
-        }
 
-        // =====================================================
-        // 5. LATEST VISITED STATION
-        // =====================================================
+            const lstn =
+                safeString(
+                    statusData?.LSTN,
+                ).toUpperCase();
 
-        const visitedStations =
-            routeStations.filter(
-                (station: any) =>
-                    station?.actual_arrival ||
-                    station?.actual_departure
-            );
-
-        if (
-            visitedStations.length > 0
-        ) {
-
-            const latest =
-                visitedStations[
-                visitedStations.length - 1
-                ];
-
-            const code =
-                String(
-                    latest?.station_code ||
-                    latest?.code ||
-                    ""
+            if (
+                lstn &&
+                normalized.some(
+                    (
+                        station: any,
+                    ) =>
+                        station.code ===
+                        lstn,
                 )
-                    .trim()
-                    .toUpperCase();
-
-            if (code) {
-                return code;
+            ) {
+                return lstn;
             }
-        }
 
-        // =====================================================
-        // 6. SELECTED STATION FALLBACK
-        // =====================================================
-
-        return String(
-            selectedStation || ""
-        )
-            .trim()
-            .toUpperCase();
-    };
-
-    // =========================================================
-    // CPOS NAME
-    // =========================================================
-
-    const extractCposStationName = (
-        cpos: string,
-        code: string
-    ): string => {
-
-        if (!cpos || !code) {
-            return "";
-        }
-
-        const match =
-            cpos.match(
-                /(?:from|at)\s+(.+?)\(([A-Za-z0-9]{2,6})\)/i
+            return (
+                first?.code ||
+                selectedStation
             );
-
-        if (!match) {
-            return "";
-        }
-
-        const extractedCode =
-            String(match[2] || "")
-                .trim()
-                .toUpperCase();
-
-        if (
-            extractedCode !==
-            code.trim().toUpperCase()
-        ) {
-            return "";
-        }
-
-        return (
-            match[1]?.trim() || ""
-        );
-    };
+        };
 
     // =========================================================
     // TRAIN CLICK
     // =========================================================
 
-    const handleTrainClick = async (
-        train: StationTrain
-    ) => {
-
-        const trainNumber =
-            String(
-                train.train_no
-            ).trim();
-
-        if (!trainNumber) {
-            return;
-        }
-
-        setSelectedTrain(
-            trainNumber
-        );
-
-        setSelectedTrainStatus(null);
-        setSelectedTrainRoute(null);
-        setSelectedTrainError(null);
-        setPayload(null);
-
-        setLoadingTrain(true);
-
-        try {
-
-            const today =
-                getTodayNTESDate();
-
-            // -------------------------------------------------
-            // LIVE STATUS
-            // -------------------------------------------------
-
-            const status =
-                await getTrainStatus(
-                    trainNumber,
-                    today
+    const handleTrainClick =
+        async (
+            train: any,
+        ) => {
+            const trainNumber =
+                normalizeTrainNumber(
+                    train?.train_no,
                 );
 
-            console.log(
-                "SELECTED TRAIN STATUS:",
-                status
-            );
+            if (!trainNumber) {
+                return;
+            }
 
-            // -------------------------------------------------
-            // ROUTE
-            // -------------------------------------------------
-
-            const route =
-                await getTrainRoute(
-                    trainNumber,
-                    today
-                );
-
-            console.log(
-                "SELECTED TRAIN ROUTE:",
-                route
-            );
-
-            // -------------------------------------------------
-            // CURRENT STATION
-            // -------------------------------------------------
-
-            const currentStation =
-                getCorrectCurrentStation(
-                    route,
-                    status
-                );
-
-            console.log(
-                "CORRECT CURRENT STATION:",
-                currentStation
-            );
-
-            // -------------------------------------------------
-            // RAILDRISHTI ETA
-            // -------------------------------------------------
-
-            const eta =
-                await getETA(
-                    trainNumber,
-                    currentStation
-                );
-
-            console.log(
-                "RailDrishti ETA:",
-                eta
+            setSelectedTrain(
+                trainNumber,
             );
 
             setSelectedTrainStatus(
-                status
+                null,
             );
 
             setSelectedTrainRoute(
-                route
+                null,
+            );
+
+            setSelectedTrainError(
+                null,
             );
 
             setPayload(
-                eta
+                null,
             );
 
-            setSelectedTrainError(
-                null
+            setLoadingTrain(
+                true,
             );
 
-            updateLastUpdated();
-
-        } catch (error) {
-
-            console.error(
-                "Selected train request failed:",
-                error
+            setMobileTab(
+                "details",
             );
 
-            setPayload(null);
+            const date =
+                getTodayNTESDate();
 
-            setSelectedTrainError(
-                error instanceof Error
-                    ? error.message
-                    : "Failed to fetch live train data"
+            let statusData:
+                any = null;
+
+            let routeData:
+                any = null;
+
+            let etaData:
+                ETAResponse | null =
+                null;
+
+            // STATUS
+            try {
+                statusData =
+                    await getTrainStatus(
+                        trainNumber,
+                        date,
+                    );
+
+                setSelectedTrainStatus(
+                    statusData,
+                );
+            } catch (error) {
+                console.warn(
+                    "Train status unavailable:",
+                    error,
+                );
+            }
+
+            // ROUTE
+            try {
+                routeData =
+                    await getTrainRoute(
+                        trainNumber,
+                        date,
+                    );
+
+                setSelectedTrainRoute(
+                    routeData,
+                );
+            } catch (error) {
+                console.warn(
+                    "Train route unavailable:",
+                    error,
+                );
+            }
+
+            // CURRENT LOCATION
+            const currentStation =
+                getCurrentStation(
+                    routeData,
+                    statusData,
+                );
+
+            // ETA
+            try {
+                etaData =
+                    await getETA(
+                        trainNumber,
+                        currentStation,
+                    );
+
+                setPayload(
+                    etaData,
+                );
+            } catch (error) {
+                console.warn(
+                    "ETA unavailable:",
+                    error,
+                );
+            }
+
+            if (
+                !statusData &&
+                !routeData &&
+                !etaData
+            ) {
+                setSelectedTrainError(
+                    "Detailed railway information is temporarily unavailable for this train.",
+                );
+            } else if (
+                !etaData
+            ) {
+                setSelectedTrainError(
+                    "Railway status is available, but RailSaathi prediction is temporarily unavailable.",
+                );
+            }
+
+            setLastUpdated(
+                new Date().toLocaleTimeString(
+                    [],
+                    {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                    },
+                ),
             );
 
-        } finally {
-
-            setLoadingTrain(false);
-        }
-    };
+            setLoadingTrain(
+                false,
+            );
+        };
 
     // =========================================================
-    // AUTO REFRESH SELECTED TRAIN
+    // TRAIN REFRESH
     // =========================================================
 
     useEffect(() => {
-
         if (!selectedTrain) {
             return;
         }
 
-        let cancelled = false;
+        let cancelled =
+            false;
 
-        const refreshSelectedTrain =
+        const refresh =
             async () => {
+                const date =
+                    getTodayNTESDate();
+
+                let statusData:
+                    any = null;
+
+                let routeData:
+                    any = null;
 
                 try {
-
-                    const today =
-                        getTodayNTESDate();
-
-                    const status =
+                    statusData =
                         await getTrainStatus(
                             selectedTrain,
-                            today
+                            date,
                         );
 
-                    if (cancelled) {
-                        return;
+                    if (
+                        !cancelled
+                    ) {
+                        setSelectedTrainStatus(
+                            statusData,
+                        );
                     }
+                } catch {
+                    // Keep current.
+                }
 
-                    const route =
+                try {
+                    routeData =
                         await getTrainRoute(
                             selectedTrain,
-                            today
+                            date,
                         );
 
-                    if (cancelled) {
-                        return;
+                    if (
+                        !cancelled
+                    ) {
+                        setSelectedTrainRoute(
+                            routeData,
+                        );
                     }
+                } catch {
+                    // Keep current.
+                }
 
-                    const currentStation =
-                        getCorrectCurrentStation(
-                            route,
-                            status
-                        );
+                const currentStation =
+                    getCurrentStation(
+                        routeData,
+                        statusData,
+                    );
 
+                try {
                     const eta =
                         await getETA(
                             selectedTrain,
-                            currentStation
+                            currentStation,
                         );
 
-                    if (cancelled) {
-                        return;
+                    if (
+                        !cancelled
+                    ) {
+                        setPayload(
+                            eta,
+                        );
+
+                        setSelectedTrainError(
+                            null,
+                        );
+
+                        setLastUpdated(
+                            new Date().toLocaleTimeString(
+                                [],
+                                {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                    second: "2-digit",
+                                },
+                            ),
+                        );
                     }
-
-                    console.log(
-                        "AUTO REFRESH CURRENT:",
-                        currentStation
-                    );
-
-                    console.log(
-                        "AUTO REFRESH ETA:",
-                        eta
-                    );
-
-                    setSelectedTrainStatus(
-                        status
-                    );
-
-                    setSelectedTrainRoute(
-                        route
-                    );
-
-                    setPayload(
-                        eta
-                    );
-
-                    setSelectedTrainError(
-                        null
-                    );
-
-                    updateLastUpdated();
-
-                } catch (error) {
-
-                    console.error(
-                        "Automatic train refresh failed:",
-                        error
-                    );
+                } catch {
+                    // Keep current ETA.
                 }
             };
 
-        const intervalId =
+        const interval =
             window.setInterval(
-                refreshSelectedTrain,
-                60_000
+                refresh,
+                60_000,
             );
 
         return () => {
-
             cancelled = true;
 
             window.clearInterval(
-                intervalId
+                interval,
             );
         };
-
-    }, [selectedTrain]);
+    }, [
+        selectedTrain,
+    ]);
 
     // =========================================================
-    // AUTHORITATIVE CURRENT STATION
+    // FILTERED TRAINS
+    // =========================================================
+
+    const filteredTrains =
+        useMemo(() => {
+            const trains =
+                stationData?.trains ??
+                [];
+
+            const query =
+                trainSearch
+                    .trim()
+                    .toLowerCase();
+
+            if (!query) {
+                return trains;
+            }
+
+            return trains.filter(
+                (train: any) => {
+                    const number =
+                        normalizeTrainNumber(
+                            train?.train_no,
+                        ).toLowerCase();
+
+                    const name =
+                        safeString(
+                            train?.train_name,
+                        ).toLowerCase();
+
+                    const source =
+                        safeString(
+                            train?.source_name ||
+                                train?.source,
+                        ).toLowerCase();
+
+                    const destination =
+                        safeString(
+                            train?.destination_name ||
+                                train?.destination,
+                        ).toLowerCase();
+
+                    return (
+                        number.includes(
+                            query,
+                        ) ||
+                        name.includes(
+                            query,
+                        ) ||
+                        source.includes(
+                            query,
+                        ) ||
+                        destination.includes(
+                            query,
+                        )
+                    );
+                },
+            );
+        }, [
+            stationData,
+            trainSearch,
+        ]);
+
+    // =========================================================
+    // SELECTED BOARD TRAIN
+    // =========================================================
+
+    const selectedBoardTrain =
+        stationData?.trains?.find(
+            (train: any) =>
+                normalizeTrainNumber(
+                    train?.train_no,
+                ) ===
+                selectedTrain,
+        ) ?? null;
+
+    // =========================================================
+    // CURRENT
     // =========================================================
 
     const current =
-        String(
-            payload?.current_station ||
-            selectedTrainRoute?.current_station ||
-            ""
-        )
-            .trim()
-            .toUpperCase() ||
-        getCorrectCurrentStation(
-            selectedTrainRoute,
-            selectedTrainStatus
-        );
+        selectedTrainRoute ||
+        selectedTrainStatus
+            ? getCurrentStation(
+                  selectedTrainRoute,
+                  selectedTrainStatus,
+              )
+            : selectedStation;
 
     // =========================================================
     // ROUTE
     // =========================================================
 
     const routeStations =
-        selectedTrainRoute?.route || [];
-
-    const displayStations =
-        routeStations.length > 0
-            ? routeStations
+        Array.isArray(
+            selectedTrainRoute?.route,
+        )
+            ? selectedTrainRoute.route
             : [];
 
     // =========================================================
-    // CURRENT STATION NAME
-    // =========================================================
-
-    const routeCurrentStation =
-        routeStations.find(
-            (station: any) =>
-                String(
-                    station?.station_code ||
-                    ""
-                )
-                    .trim()
-                    .toUpperCase() ===
-                current
-        );
-
-    const cposStationName =
-        extractCposStationName(
-            selectedTrainStatus?.CPOS || "",
-            current
-        );
-
-    const localStation =
-        stations.find(
-            (station: any) =>
-                String(
-                    station?.code || ""
-                )
-                    .trim()
-                    .toUpperCase() ===
-                current
-        );
-
-    const currentStationName =
-        routeCurrentStation?.station_name ||
-        cposStationName ||
-        localStation?.name ||
-        selectedTrainRoute?.current_station_name ||
-        selectedTrainStatus?.LSTNN ||
-        current;
-
-    // =========================================================
-    // ROUTE INDEX
+    // CURRENT INDEX
     // =========================================================
 
     const currentRouteIndex =
         routeStations.findIndex(
             (station: any) =>
-                String(
-                    station?.station_code ||
-                    ""
-                )
-                    .trim()
-                    .toUpperCase() ===
-                current
+                safeString(
+                    station?.station_code,
+                ).toUpperCase() ===
+                current.toUpperCase(),
         );
 
     // =========================================================
-    // VISITED STATIONS
+    // CURRENT STATION NAME
     // =========================================================
 
-    const visitedIndexes =
-        routeStations
-            .map(
-                (
-                    station: any,
-                    index: number
-                ) => ({
-                    station,
-                    index,
-                })
-            )
-            .filter(
-                ({
-                    station,
-                }: any) =>
-                    Boolean(
-                        station?.actual_arrival ||
-                        station?.actual_departure
-                    )
-            );
-
-    const latestVisitedIndex =
-        visitedIndexes.length > 0
-            ? visitedIndexes[
-                visitedIndexes.length - 1
-            ].index
-            : -1;
-
-    // =========================================================
-    // FIRST UNVISITED STATION
-    // =========================================================
-
-    const firstUnvisitedIndex =
-        routeStations.findIndex(
+    const currentStationName =
+        routeStations.find(
             (station: any) =>
-                !station?.actual_arrival &&
-                !station?.actual_departure
-        );
+                safeString(
+                    station?.station_code,
+                ).toUpperCase() ===
+                current.toUpperCase(),
+        )?.station_name ||
+        selectedTrainStatus?.LSTNN ||
+        getStationName(
+            current,
+            stationData,
+        ) ||
+        current ||
+        "Unknown";
 
     // =========================================================
     // NEXT STATION
     // =========================================================
 
-    let nextStationIndex = -1;
-
-    if (
-        currentRouteIndex >= 0
-    ) {
-
-        nextStationIndex =
-            currentRouteIndex + 1;
-
-    } else if (
-        firstUnvisitedIndex >= 0
-    ) {
-
-        nextStationIndex =
-            firstUnvisitedIndex;
-
-    } else if (
-        latestVisitedIndex >= 0
-    ) {
-
-        nextStationIndex =
-            latestVisitedIndex + 1;
-    }
-
-    const nextRouteStation =
-        nextStationIndex >= 0 &&
-            nextStationIndex <
+    const nextStation =
+        currentRouteIndex >= 0 &&
+        currentRouteIndex + 1 <
             routeStations.length
             ? routeStations[
-            nextStationIndex
-            ]
+                  currentRouteIndex + 1
+              ]
             : null;
 
     // =========================================================
     // DESTINATION
     // =========================================================
 
-    const destinationRouteStation =
+    const destinationStation =
         routeStations.length > 0
             ? routeStations[
-            routeStations.length - 1
-            ]
+                  routeStations.length -
+                      1
+              ]
             : null;
 
     // =========================================================
-    // JOURNEY PROGRESS
+    // DISTANCE
     // =========================================================
+
+    const currentDistance =
+        currentRouteIndex >= 0
+            ? Number(
+                  routeStations[
+                      currentRouteIndex
+                  ]?.distance ??
+                      0,
+              )
+            : 0;
 
     const totalDistance =
         routeStations.length > 0
             ? Number(
-                routeStations[
-                    routeStations.length - 1
-                ]?.distance || 0
-            )
+                  routeStations[
+                      routeStations.length -
+                          1
+                  ]?.distance ??
+                      0,
+              )
             : 0;
 
-    let currentDistance = 0;
-
-    if (
-        currentRouteIndex >= 0
-    ) {
-
-        currentDistance =
-            Number(
-                routeStations[
-                    currentRouteIndex
-                ]?.distance || 0
-            );
-
-    } else {
-
-        const nextIndex =
-            nextStationIndex;
-
-        const previousIndex =
-            nextIndex > 0
-                ? nextIndex - 1
-                : -1;
-
-        if (
-            previousIndex >= 0 &&
-            nextIndex >= 0 &&
-            nextIndex <
-            routeStations.length
-        ) {
-
-            const previousDistance =
-                Number(
-                    routeStations[
-                        previousIndex
-                    ]?.distance || 0
-                );
-
-            const nextDistance =
-                Number(
-                    routeStations[
-                        nextIndex
-                    ]?.distance ||
-                    previousDistance
-                );
-
-            currentDistance =
-                previousDistance +
-                (
-                    nextDistance -
-                    previousDistance
-                ) *
-                0.5;
-
-        } else if (
-            latestVisitedIndex >= 0
-        ) {
-
-            currentDistance =
-                Number(
-                    routeStations[
-                        latestVisitedIndex
-                    ]?.distance || 0
-                );
-        }
-    }
-
-    const journeyProgress =
+    const progress =
         totalDistance > 0
             ? Math.min(
-                99,
-                Math.max(
-                    0,
-                    (
-                        currentDistance /
-                        totalDistance
-                    ) *
-                    100
-                )
-            )
+                  100,
+                  Math.max(
+                      0,
+                      (currentDistance /
+                          totalDistance) *
+                          100,
+                  ),
+              )
             : 0;
 
     // =========================================================
@@ -1062,1178 +1219,1891 @@ export default function PassengerView() {
     // =========================================================
 
     const predictions =
-        payload?.predictions || [];
-
-    const firstPrediction =
-        predictions[0] || null;
-
-    const lastPrediction =
-        predictions.length > 0
-            ? predictions[
-            predictions.length - 1
-            ]
-            : null;
+        payload?.predictions ??
+        [];
 
     // =========================================================
-    // DELAY
+    // PREDICTION MAP
+    //
+    // This is important.
+    //
+    // The old timeline could leave a huge blank area when
+    // route stations and predictions were not aligned.
+    //
+    // We explicitly match predictions to route station codes.
+    // =========================================================
+
+    const predictionByCode =
+        useMemo(() => {
+            const map =
+                new Map<
+                    string,
+                    any
+                >();
+
+            predictions.forEach(
+                (prediction: any) => {
+                    const code =
+                        safeString(
+                            prediction
+                                ?.station
+                                ?.code,
+                        ).toUpperCase();
+
+                    if (code) {
+                        map.set(
+                            code,
+                            prediction,
+                        );
+                    }
+                },
+            );
+
+            return map;
+        }, [
+            predictions,
+        ]);
+
+    // =========================================================
+    // UPCOMING ROUTE
+    //
+    // Compact list only.
+    // No giant empty timeline.
+    // =========================================================
+
+    const upcomingStations =
+        useMemo(() => {
+            if (
+                routeStations.length ===
+                0
+            ) {
+                return [];
+            }
+
+            let startIndex =
+                currentRouteIndex >=
+                0
+                    ? currentRouteIndex
+                    : 0;
+
+            const stations =
+                routeStations
+                    .slice(
+                        startIndex,
+                        startIndex +
+                            7,
+                    )
+                    .map(
+                        (
+                            station: any,
+                            index: number,
+                        ) => {
+                            const code =
+                                safeString(
+                                    station?.station_code,
+                                ).toUpperCase();
+
+                            const prediction =
+                                predictionByCode.get(
+                                    code,
+                                );
+
+                            return {
+                                station,
+                                prediction,
+                                isCurrent:
+                                    index ===
+                                    0,
+                            };
+                        },
+                    );
+
+            return stations;
+        }, [
+            routeStations,
+            currentRouteIndex,
+            predictionByCode,
+        ]);
+
+    // =========================================================
+    // TRAIN NAME
+    // =========================================================
+
+    const trainName =
+        selectedTrainStatus?.TNM ||
+        selectedTrainStatus?.TRAIN_NAME ||
+        selectedBoardTrain?.train_name ||
+        "Selected Train";
+
+    // =========================================================
+    // CURRENT DELAY
     // =========================================================
 
     const currentDelay =
         Number(
             payload?.current_delay_minutes ??
-            selectedTrainStatus?.LDEL ??
-            0
+                selectedTrainStatus?.LDEL ??
+                selectedBoardTrain?.arrival_delay ??
+                0,
         );
 
-    const finalPredictionDelay =
+    // =========================================================
+    // FINAL PREDICTED DELAY
+    // =========================================================
+
+    const lastPrediction =
+        predictions[
+            predictions.length -
+                1
+        ] ?? null;
+
+    const finalDelay =
         lastPrediction
             ? Number(
-                lastPrediction.delay_minutes ||
-                0
-            )
+                  lastPrediction.delay_minutes ??
+                      0,
+              )
             : currentDelay;
 
     const delayChange =
-        finalPredictionDelay -
+        finalDelay -
         currentDelay;
 
     // =========================================================
-    // STATUS
-    // =========================================================
-
-    const statusIntelligence =
-        currentDelay > 15
-            ? "SIGNIFICANTLY DELAYED"
-            : currentDelay > 5
-                ? "RUNNING LATE"
-                : currentDelay < -2
-                    ? "RUNNING EARLY"
-                    : "ON TIME";
-
-    // =========================================================
-    // STATUS EXPLANATION
-    // =========================================================
-
-    const delayTrend =
-        finalPredictionDelay >
-            currentDelay + 2
-            ? "Delay is expected to increase further."
-            : finalPredictionDelay <
-                currentDelay - 2
-                ? "RailDrishti expects the delay to reduce ahead."
-                : "Delay is expected to remain broadly stable.";
-
-    const statusExplanation =
-        currentDelay > 5
-            ? `The train is currently ${Math.round(
-                currentDelay
-            )} min behind schedule. ${delayTrend}`
-            : currentDelay < -2
-                ? `The train is currently around ${Math.round(
-                    Math.abs(currentDelay)
-                )} min ahead of schedule. ${delayTrend}`
-                : "The train is currently operating close to its scheduled time.";
-
-    // =========================================================
-    // PREDICTION RANGE
-    // =========================================================
-
-    const predictionRangeText =
-        predictions.length > 0
-            ? `${Math.round(
-                Math.min(
-                    Number(
-                        firstPrediction?.delay_minutes ||
-                        currentDelay
-                    ),
-                    finalPredictionDelay
-                )
-            )}–${Math.round(
-                Math.max(
-                    Number(
-                        firstPrediction?.delay_minutes ||
-                        currentDelay
-                    ),
-                    finalPredictionDelay
-                )
-            )} min`
-            : `${Math.round(
-                currentDelay
-            )} min`;
-
-    // =========================================================
-    // ML EXPLANATION
-    // =========================================================
-
-    const mlExplanation =
-        currentDelay > 5
-            ? delayChange > 2
-                ? `The train is already running ${Math.round(
-                    currentDelay
-                )} min late. RailDrishti expects part of this delay to propagate through downstream segments, increasing the projected delay by around ${Math.round(
-                    delayChange
-                )} min.`
-                : delayChange < -2
-                    ? `The train is currently ${Math.round(
-                        currentDelay
-                    )} min late, but RailDrishti expects the delay to recover by around ${Math.round(
-                        Math.abs(delayChange)
-                    )} min across the remaining route.`
-                    : `The train is currently ${Math.round(
-                        currentDelay
-                    )} min late. RailDrishti expects the delay to remain broadly stable across the remaining route.`
-            : currentDelay < -2
-                ? `The train is currently running around ${Math.round(
-                    Math.abs(currentDelay)
-                )} min early. RailDrishti expects the schedule advantage to gradually normalize downstream.`
-                : "The train is currently close to schedule, so RailDrishti expects only limited downstream delay variation.";
-
-    const mlFactors = [
-        currentDelay !== 0
-            ? `Current upstream delay: ${Math.round(
-                currentDelay
-            )} min`
-            : "Current upstream delay: minimal",
-
-        predictions.length > 0
-            ? `Predicted downstream change: ${delayChange >= 0
-                ? "+"
-                : ""
-            }${Math.round(
-                delayChange
-            )} min`
-            : "Predicted downstream change: unavailable",
-
-        "Historical segment behavior",
-
-        "Live operating conditions",
-    ];
-
-    // =========================================================
-    // DATA SOURCE LABEL
+    // DATA SOURCE
     // =========================================================
 
     const dataSource =
         stationData?.data_source ||
-        "NTES_LIVE";
+        "UNAVAILABLE";
 
-    const dataSourceLabel =
-        dataSource === "NTES_LIVE"
+    const sourceLabel =
+        dataSource ===
+        "NTES_LIVE"
             ? "NTES LIVE"
-            : dataSource === "REDIS_CACHE"
-                ? "CACHED"
-                : dataSource === "DEMO_FALLBACK"
-                    ? "DEMO"
-                    : "UNAVAILABLE";
+            : dataSource ===
+                "REDIS_CACHE"
+              ? "REDIS CACHE"
+              : dataSource ===
+                  "DEMO_FALLBACK"
+                ? "DEMO FALLBACK"
+                : "NO DATA";
 
-    // =========================================================
+    const sourceClass =
+        dataSource ===
+        "NTES_LIVE"
+            ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+            : dataSource ===
+                "REDIS_CACHE"
+              ? "border-blue-200 bg-blue-50 text-blue-600"
+              : dataSource ===
+                  "DEMO_FALLBACK"
+                ? "border-amber-200 bg-amber-50 text-amber-600"
+                : "border-slate-200 bg-slate-50 text-slate-500";
+
+    // =============================================================
     // RENDER
-    // =========================================================
+    // =============================================================
 
     return (
-        <main className="min-h-screen bg-[#08080F] px-4 py-5 text-white">
-
-            <div className="mx-auto max-w-lg space-y-4">
-
-                {/* =====================================================
-                    HEADER
-                ===================================================== */}
-
-                <header className="flex items-center justify-between">
-
-                    <div>
-
-                        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-blue-400">
-                            RailDrishti
-                        </p>
-
-                        <h1 className="mt-1 text-xl font-semibold">
-                            {selectedTrain
-                                ? `${selectedTrain} ${selectedTrainStatus?.TNM ||
-                                selectedTrainStatus?.TRAIN_NAME ||
-                                "Selected Train"
-                                }`
-                                : "Live Railway Intelligence"}
-                        </h1>
-
-                    </div>
-
-                    <div className="text-right">
-
-                        <span className="inline-flex rounded-full bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300">
-                            ● Live
-                        </span>
-
-                        {lastUpdated && (
-                            <p className="mt-1 text-[10px] text-white/35">
-                                Updated {lastUpdated}
-                            </p>
-                        )}
-
-                    </div>
-
-                </header>
-
-                {/* =====================================================
-                    STATION SEARCH
-                ===================================================== */}
-
-                <section className="rounded-3xl border border-blue-400/20 bg-[#12121d] p-5">
-
-                    <p className="text-xs uppercase tracking-widest text-white/40">
-                        Search station
-                    </p>
-
-                    <div className="mt-3 flex gap-2">
-
-                        <input
-                            type="text"
-                            value={stationInput}
-                            onChange={(event) =>
-                                setStationInput(
-                                    event.target.value
-                                )
-                            }
-                            onKeyDown={
-                                handleStationKeyDown
-                            }
-                            placeholder="Enter station code e.g. RPH"
-                            className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-[#0f0f18] px-4 py-3 text-white uppercase outline-none placeholder:text-white/25 focus:border-blue-400/50"
-                            maxLength={5}
-                        />
-
-                        <button
-                            type="button"
-                            onClick={
-                                handleStationSearch
-                            }
-                            disabled={
-                                !stationInput.trim() ||
-                                loadingStation
-                            }
-                            className="rounded-2xl bg-blue-500 px-5 py-3 text-sm font-semibold transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                            {loadingStation
-                                ? "..."
-                                : "Search"}
-                        </button>
-
-                    </div>
-
-                    <p className="mt-2 text-xs text-white/30">
-                        Enter an Indian Railways station code to load its live NTES board.
-                    </p>
-
-                    {selectedStation &&
-                        !loadingStation && (
-                            <p className="mt-3 text-xs text-emerald-300/70">
-                                Live board loaded for{" "}
-                                {selectedStation}
-                            </p>
-                        )}
-
-                </section>
-
-                {/* =====================================================
-                    SELECTED STATION
-                ===================================================== */}
-
-                {stationData && (
-                    <section className="rounded-3xl border border-white/10 bg-[#12121d] p-5">
-
-                        <div className="flex items-start justify-between gap-3">
-
-                            <div>
-
-                                <p className="text-xs uppercase tracking-widest text-white/40">
-                                    Selected station
-                                </p>
-
-                                <p className="mt-2 text-2xl font-semibold">
-                                    {stationData.station_name ||
-                                        selectedStation}
-                                </p>
-
-                                <p className="mt-1 text-sm text-white/45">
-                                    {stationData.total_trains} live trains
-                                </p>
-
-                            </div>
-
-                            <span
-                                className={`rounded-full px-3 py-1 text-[10px] font-semibold ${dataSource ===
-                                    "NTES_LIVE"
-                                    ? "bg-emerald-400/10 text-emerald-300"
-                                    : dataSource ===
-                                        "REDIS_CACHE"
-                                        ? "bg-amber-400/10 text-amber-300"
-                                        : "bg-blue-400/10 text-blue-300"
-                                    }`}
-                            >
-                                {dataSourceLabel}
-                            </span>
-
-                        </div>
-
-                    </section>
-                )}
-
-                {/* =====================================================
-                    LIVE STATION BOARD
-                ===================================================== */}
-
-                {stationData && (
-                    <section className="rounded-3xl border border-white/10 bg-[#12121d] p-5">
-
-                        <div className="mb-4 flex items-center justify-between">
-
-                            <div>
-
-                                <p className="text-xs uppercase tracking-widest text-white/40">
-                                    Live station board
-                                </p>
-
-                                <h2 className="mt-1 text-lg font-semibold">
-                                    {stationData.station_name}
-                                </h2>
-
-                            </div>
-
-                            <span className="text-xs text-white/40">
-                                {stationData.total_trains} trains
-                            </span>
-
-                        </div>
-
-                        <div className="space-y-3">
-
-                            {stationData.trains?.map(
-                                (
-                                    train: StationTrain
-                                ) => {
-
-                                    const trainNumber =
-                                        String(
-                                            train.train_no
-                                        ).trim();
-
-                                    const isSelected =
-                                        selectedTrain ===
-                                        trainNumber;
-
-                                    const arrivalDelay =
-                                        Number(
-                                            train.arrival_delay ||
-                                            0
-                                        );
-
-                                    return (
-                                        <button
-                                            key={`${trainNumber}-${train.eta}-${train.etd}`}
-                                            type="button"
-                                            onClick={() =>
-                                                handleTrainClick(
-                                                    train
-                                                )
-                                            }
-                                            className={`w-full cursor-pointer rounded-2xl border p-4 text-left transition ${isSelected
-                                                ? "border-blue-400/50 bg-blue-400/10"
-                                                : "border-white/10 bg-[#0f0f18] hover:bg-white/[0.06]"
-                                                }`}
-                                        >
-
-                                            <div className="flex items-start justify-between gap-3">
-
-                                                <div className="min-w-0">
-
-                                                    <p className="truncate font-semibold">
-                                                        {trainNumber}
-                                                        {" — "}
-                                                        {train.train_name ||
-                                                            "Unknown train"}
-                                                    </p>
-
-                                                    <p className="mt-1 truncate text-xs text-white/40">
-                                                        {train.source_name ||
-                                                            train.source ||
-                                                            "—"}
-                                                        {" → "}
-                                                        {train.destination_name ||
-                                                            train.destination ||
-                                                            "—"}
-                                                    </p>
-
-                                                </div>
-
-                                                <div className="shrink-0 text-right">
-
-                                                    <p className="text-lg font-semibold">
-                                                        {train.eta ||
-                                                            train.etd ||
-                                                            "—"}
-                                                    </p>
-
-                                                    <p className="text-xs text-white/40">
-                                                        Platform{" "}
-                                                        {train.platform ||
-                                                            "—"}
-                                                    </p>
-
-                                                </div>
-
-                                            </div>
-
-                                            <div className="mt-3 flex items-center justify-between gap-2 text-xs">
-
-                                                <span className="truncate text-white/40">
-                                                    {train.train_type ||
-                                                        "TRAIN"}
-                                                </span>
-
-                                                <span
-                                                    className={
-                                                        arrivalDelay >
-                                                            15
-                                                            ? "shrink-0 text-red-300"
-                                                            : arrivalDelay >
-                                                                0
-                                                                ? "shrink-0 text-amber-300"
-                                                                : "shrink-0 text-emerald-300"
-                                                    }
-                                                >
-                                                    {arrivalDelay >
-                                                        0
-                                                        ? `${arrivalDelay} min late`
-                                                        : "On time"}
-                                                </span>
-
-                                            </div>
-
-                                        </button>
-                                    );
-                                }
-                            )}
-
-                        </div>
-
-                    </section>
-                )}
-
-                {/* =====================================================
-                    SELECTED TRAIN
-                ===================================================== */}
-
-                {selectedTrain && (
-                    <section className="rounded-2xl border border-blue-400/20 bg-blue-400/10 p-4">
-
-                        <div className="flex items-start justify-between">
-
-                            <div>
-
-                                <p className="text-xs uppercase tracking-widest text-blue-300">
-                                    Selected train
-                                </p>
-
-                                <p className="mt-1 text-lg font-semibold">
-                                    {selectedTrain}
-                                </p>
-
-                            </div>
-
-                            {loadingTrain && (
-                                <span className="text-xs text-blue-300">
-                                    Updating...
-                                </span>
-                            )}
-
-                        </div>
-
-                        {selectedTrainError ? (
-
-                            <p className="mt-3 text-sm text-red-400">
-                                {selectedTrainError}
-                            </p>
-
-                        ) : loadingTrain ? (
-
-                            <p className="mt-3 text-sm text-white/40">
-                                Fetching live train status and RailDrishti prediction…
-                            </p>
-
-                        ) : selectedTrainStatus ? (
-
-                            <div className="mt-3 space-y-3 text-sm text-white/60">
-
-                                <p>
-                                    Route:{" "}
-                                    <span className="text-white">
-                                        {
-                                            selectedTrainStatus.SRCN ||
-                                            selectedTrainStatus.SRC ||
-                                            "—"
-                                        }
-                                        {" → "}
-                                        {
-                                            selectedTrainStatus.DSTNN ||
-                                            "—"
-                                        }
-                                    </span>
-                                </p>
-
-                                {/* CURRENT STATION */}
-
-                                <div className="rounded-2xl border border-blue-400/20 bg-blue-400/10 p-4">
-
-                                    <p className="text-[10px] uppercase tracking-widest text-blue-300">
-                                        Current station
-                                    </p>
-
-                                    <p className="mt-1 text-xl font-semibold text-white">
-                                        {currentStationName}
-                                    </p>
-
-                                    <p className="mt-1 text-xs text-blue-300/70">
-                                        {current}
-                                    </p>
-
-                                </div>
-
-                                <p>
-                                    Delay:{" "}
-                                    <span className="text-white">
-                                        {Math.round(
-                                            currentDelay
-                                        )}{" "}
-                                        min
-                                    </span>
-                                </p>
-
-                                <p>
-                                    Status:{" "}
-                                    <span className="text-white">
-                                        {
-                                            selectedTrainStatus.CPOS ||
-                                            "Running"
-                                        }
-                                    </span>
-                                </p>
-
-                                {selectedTrainRoute && (
-                                    <p>
-                                        Stations:{" "}
-                                        <span className="text-white">
-                                            {
-                                                routeStations.length
-                                            }
-                                        </span>
-                                    </p>
-                                )}
-
-                            </div>
-
-                        ) : null}
-
-                    </section>
-                )}
-
-                {/* =====================================================
-                    ETA
-                ===================================================== */}
-
-                {firstPrediction && (
-                    <ETACard
-                        prediction={
-                            firstPrediction
+        <main className="min-h-screen overflow-hidden bg-[#F5F8FC] text-slate-900">
+            {/* =====================================================
+                ANIMATIONS
+            ===================================================== */}
+
+            <style>
+                {`
+                    @keyframes railFloat {
+                        0%, 100% {
+                            transform: translateY(0);
                         }
-                    />
-                )}
 
-                {/* =====================================================
-                    ROUTE MAP
-                ===================================================== */}
-
-                {displayStations.length > 0 && (
-                    <TrainMap
-                        stations={
-                            displayStations
+                        50% {
+                            transform: translateY(-8px);
                         }
-                        currentCode={
-                            current
+                    }
+
+                    @keyframes pulseSoft {
+                        0%, 100% {
+                            opacity: .45;
+                            transform: scale(1);
                         }
-                    />
-                )}
 
-                {/* =====================================================
-                    JOURNEY PROGRESS
-                ===================================================== */}
-
-                {selectedTrainRoute &&
-                    routeStations.length > 0 && (
-                        <section className="rounded-3xl border border-white/10 bg-[#12121d] p-5">
-
-                            <div className="flex items-center justify-between">
-
-                                <div>
-
-                                    <p className="text-xs uppercase tracking-widest text-white/40">
-                                        Journey progress
-                                    </p>
-
-                                    <p className="mt-2 text-lg font-semibold text-white">
-                                        {currentStationName}
-                                    </p>
-
-                                    <p className="mt-1 text-xs text-white/35">
-                                        {current}
-                                    </p>
-
-                                </div>
-
-                                <p className="text-2xl font-bold text-blue-400">
-                                    {Math.round(
-                                        journeyProgress
-                                    )}
-                                    %
-                                </p>
-
-                            </div>
-
-                            <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
-
-                                <div
-                                    className="h-full rounded-full bg-blue-400 transition-all duration-500"
-                                    style={{
-                                        width: `${journeyProgress}%`,
-                                    }}
-                                />
-
-                            </div>
-
-                            <div className="mt-2 flex justify-between text-xs text-white/40">
-
-                                <span>
-                                    {Math.round(
-                                        currentDistance
-                                    )}{" "}
-                                    km approx. travelled
-                                </span>
-
-                                <span>
-                                    {Math.round(
-                                        totalDistance
-                                    )}{" "}
-                                    km total
-                                </span>
-
-                            </div>
-
-                            {nextRouteStation && (
-                                <div className="mt-4 rounded-2xl bg-[#0f0f18] p-3">
-
-                                    <p className="text-[10px] uppercase tracking-widest text-white/30">
-                                        Next scheduled station
-                                    </p>
-
-                                    <p className="mt-1 text-sm font-semibold text-white">
-                                        {
-                                            nextRouteStation.station_name
-                                        }
-                                    </p>
-
-                                    <p className="text-xs text-white/40">
-                                        {
-                                            nextRouteStation.station_code
-                                        }
-                                    </p>
-
-                                </div>
-                            )}
-
-                        </section>
-                    )}
-
-                {/* =====================================================
-                    NEXT STATION
-                ===================================================== */}
-
-                {selectedTrainRoute &&
-                    nextRouteStation && (
-                        <section className="rounded-3xl border border-blue-400/20 bg-[#12121d] p-5">
-
-                            <div className="flex items-start justify-between">
-
-                                <div>
-
-                                    <p className="text-xs uppercase tracking-[0.2em] text-white/40">
-                                        Next station
-                                    </p>
-
-                                    <h2 className="mt-2 text-2xl font-semibold text-white">
-                                        {
-                                            nextRouteStation.station_name
-                                        }
-                                    </h2>
-
-                                    <p className="mt-1 text-sm text-white/40">
-                                        {
-                                            nextRouteStation.station_code
-                                        }
-                                    </p>
-
-                                </div>
-
-                                <span className="rounded-full bg-blue-400/10 px-3 py-1 text-xs font-medium text-blue-300">
-                                    LIVE
-                                </span>
-
-                            </div>
-
-                            {(() => {
-
-                                const nextPrediction =
-                                    predictions.find(
-                                        (
-                                            prediction: ETAPrediction
-                                        ) =>
-                                            String(
-                                                prediction?.station?.code ||
-                                                ""
-                                            )
-                                                .trim()
-                                                .toUpperCase() ===
-                                            String(
-                                                nextRouteStation?.station_code ||
-                                                ""
-                                            )
-                                                .trim()
-                                                .toUpperCase()
-                                    );
-
-                                if (
-                                    !nextPrediction
-                                ) {
-
-                                    return (
-                                        <div className="mt-5 rounded-2xl bg-[#0f0f18] p-4">
-
-                                            <p className="text-sm text-white/40">
-                                                RailDrishti prediction for the next station is currently unavailable.
-                                            </p>
-
-                                        </div>
-                                    );
-                                }
-
-                                const nextDelay =
-                                    Number(
-                                        nextPrediction.delay_minutes ||
-                                        0
-                                    );
-
-                                return (
-                                    <div className="mt-5">
-
-                                        <div className="rounded-2xl bg-[#0f0f18] p-4">
-
-                                            <p className="text-xs uppercase tracking-widest text-white/30">
-                                                Expected arrival
-                                            </p>
-
-                                            <div className="mt-2 flex items-end justify-between">
-
-                                                <p className="text-3xl font-bold text-white">
-                                                    {new Date(
-                                                        nextPrediction.eta
-                                                    ).toLocaleTimeString(
-                                                        [],
-                                                        {
-                                                            hour: "2-digit",
-                                                            minute: "2-digit",
-                                                        }
-                                                    )}
-                                                </p>
-
-                                                <span
-                                                    className={
-                                                        nextDelay >
-                                                            15
-                                                            ? "rounded-full bg-red-400/10 px-3 py-1 text-xs text-red-300"
-                                                            : nextDelay >
-                                                                5
-                                                                ? "rounded-full bg-amber-400/10 px-3 py-1 text-xs text-amber-300"
-                                                                : "rounded-full bg-emerald-400/10 px-3 py-1 text-xs text-emerald-300"
-                                                    }
-                                                >
-                                                    {nextDelay >
-                                                        0
-                                                        ? `+${Math.round(
-                                                            nextDelay
-                                                        )} min`
-                                                        : nextDelay <
-                                                            0
-                                                            ? `${Math.round(
-                                                                nextDelay
-                                                            )} min`
-                                                            : "On time"}
-                                                </span>
-
-                                            </div>
-
-                                        </div>
-
-                                        <div className="mt-3 grid grid-cols-2 gap-3">
-
-                                            <div className="rounded-2xl bg-[#0f0f18] p-4">
-
-                                                <p className="text-xs uppercase tracking-widest text-white/30">
-                                                    Status
-                                                </p>
-
-                                                <p className="mt-2 text-sm font-semibold text-white">
-                                                    {
-                                                        nextPrediction.status ===
-                                                            "late"
-                                                            ? "Late"
-                                                            : nextPrediction.status ===
-                                                                "delayed"
-                                                                ? "Delayed"
-                                                                : nextPrediction.status ===
-                                                                    "early"
-                                                                    ? "Early"
-                                                                    : "On time"
-                                                    }
-                                                </p>
-
-                                            </div>
-
-                                            <div className="rounded-2xl bg-[#0f0f18] p-4">
-
-                                                <p className="text-xs uppercase tracking-widest text-white/30">
-                                                    Prediction range
-                                                </p>
-
-                                                <p className="mt-2 text-sm font-semibold text-white">
-                                                    {nextPrediction.confidence
-                                                        ? `${nextPrediction.confidence.width_minutes} min`
-                                                        : "—"}
-                                                </p>
-
-                                            </div>
-
-                                        </div>
-
-                                    </div>
-                                );
-
-                            })()}
-
-                        </section>
-                    )}
-
-                {/* =====================================================
-                    STATUS INTELLIGENCE
-                ===================================================== */}
-
-                {selectedTrainRoute &&
-                    selectedTrainStatus && (
-                        <section className="rounded-3xl border border-white/10 bg-[#12121d] p-5">
-
-                            <div className="flex items-start justify-between gap-4">
-
-                                <div>
-
-                                    <p className="text-xs uppercase tracking-[0.2em] text-white/40">
-                                        RailDrishti status intelligence
-                                    </p>
-
-                                    <h2 className="mt-2 text-xl font-semibold text-white">
-                                        {
-                                            statusIntelligence
-                                        }
-                                    </h2>
-
-                                    <p className="mt-1 text-sm text-white/45">
-                                        {currentDelay >
-                                            0
-                                            ? `${Math.round(
-                                                currentDelay
-                                            )} min behind schedule`
-                                            : currentDelay <
-                                                0
-                                                ? `${Math.round(
-                                                    Math.abs(
-                                                        currentDelay
-                                                    )
-                                                )} min ahead of schedule`
-                                                : "Operating on schedule"}
-                                    </p>
-
-                                </div>
-
-                                <span className="rounded-full bg-blue-400/10 px-3 py-1 text-xs text-blue-300">
-                                    AI
-                                </span>
-
-                            </div>
-
-                            {/* CURRENT / NEXT / DESTINATION */}
-
-                            <div className="mt-5 grid grid-cols-3 gap-2">
-
-                                <div className="rounded-2xl border border-blue-400/20 bg-blue-400/10 p-3">
-
-                                    <p className="text-[10px] uppercase tracking-widest text-blue-300">
-                                        Current
-                                    </p>
-
-                                    <p className="mt-2 truncate text-sm font-semibold text-white">
-                                        {
-                                            currentStationName
-                                        }
-                                    </p>
-
-                                    <p className="mt-1 text-[10px] text-blue-300/60">
-                                        {current}
-                                    </p>
-
-                                </div>
-
-                                <div className="rounded-2xl bg-[#0f0f18] p-3">
-
-                                    <p className="text-[10px] uppercase tracking-widest text-white/30">
-                                        Next
-                                    </p>
-
-                                    <p className="mt-2 truncate text-sm font-semibold text-white">
-                                        {
-                                            nextRouteStation?.station_name ||
-                                            "—"
-                                        }
-                                    </p>
-
-                                    <p className="mt-1 text-[10px] text-white/30">
-                                        {
-                                            nextRouteStation?.station_code ||
-                                            ""
-                                        }
-                                    </p>
-
-                                </div>
-
-                                <div className="rounded-2xl bg-[#0f0f18] p-3">
-
-                                    <p className="text-[10px] uppercase tracking-widest text-white/30">
-                                        Destination
-                                    </p>
-
-                                    <p className="mt-2 truncate text-sm font-semibold text-white">
-                                        {
-                                            destinationRouteStation?.station_name ||
-                                            selectedTrainStatus?.DSTNN ||
-                                            "—"
-                                        }
-                                    </p>
-
-                                    <p className="mt-1 text-[10px] text-white/30">
-                                        {
-                                            destinationRouteStation?.station_code ||
-                                            ""
-                                        }
-                                    </p>
-
-                                </div>
-
-                            </div>
-
-                            {/* DELAY OUTLOOK */}
-
-                            <div className="mt-4 rounded-2xl border border-white/5 bg-[#0f0f18] p-4">
-
-                                <p className="text-xs uppercase tracking-widest text-white/30">
-                                    Delay outlook
-                                </p>
-
-                                <p className="mt-2 text-sm leading-6 text-white/70">
-                                    {
-                                        statusExplanation
-                                    }
-                                </p>
-
-                                {predictions.length >
-                                    0 && (
-                                        <div className="mt-3 flex items-center justify-between border-t border-white/5 pt-3">
-
-                                            <span className="text-xs text-white/35">
-                                                Projected delay range
-                                            </span>
-
-                                            <span className="text-sm font-semibold text-blue-300">
-                                                {
-                                                    predictionRangeText
-                                                }
-                                            </span>
-
-                                        </div>
-                                    )}
-
-                            </div>
-
-                        </section>
-                    )}
-
-                {/* =====================================================
-                    ML REASONING
-                ===================================================== */}
-
-                {payload && (
-                    <section className="rounded-3xl border border-blue-400/20 bg-[#12121d] p-5">
-
-                        <div className="flex items-start justify-between gap-4">
-
-                            <div>
-
-                                <p className="text-xs uppercase tracking-[0.2em] text-white/40">
-                                    Why this prediction?
-                                </p>
-
-                                <h2 className="mt-2 text-xl font-semibold text-white">
-                                    RailDrishti ML reasoning
-                                </h2>
-
-                            </div>
-
-                            <span className="rounded-full bg-blue-400/10 px-3 py-1 text-xs text-blue-300">
-                                AI
-                            </span>
-
-                        </div>
-
-                        <div className="mt-4 rounded-2xl bg-[#0f0f18] p-4">
-
-                            <p className="text-sm leading-6 text-white/70">
-                                {mlExplanation}
-                            </p>
-
-                        </div>
-
-                        <div className="mt-4">
-
-                            <p className="text-xs uppercase tracking-widest text-white/30">
-                                Prediction factors
-                            </p>
-
-                            <div className="mt-3 space-y-2">
-
-                                {mlFactors.map(
-                                    (
-                                        factor,
-                                        index
-                                    ) => (
-                                        <div
-                                            key={
-                                                index
-                                            }
-                                            className="flex items-center gap-3 rounded-xl bg-[#0f0f18] px-3 py-3"
-                                        >
-
-                                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-400/10 text-[10px] text-blue-300">
-                                                {
-                                                    index +
-                                                    1
-                                                }
-                                            </span>
-
-                                            <span className="text-xs text-white/60">
-                                                {
-                                                    factor
-                                                }
-                                            </span>
-
-                                        </div>
-                                    )
-                                )}
-
-                            </div>
-
-                        </div>
-
-                        <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
-
-                            <span className="text-xs text-white/35">
-                                Ensemble confidence
-                            </span>
-
-                            <span className="text-sm font-semibold text-blue-300">
-                                {Math.round(
-                                    payload.model_confidence
-                                )}
-                                %
-                            </span>
-
-                        </div>
-
-                    </section>
-                )}
-
-                {/* =====================================================
-                    ML INSIGHT
-                ===================================================== */}
-
-                {payload && (
-                    <MLInsightCard
-                        text={
-                            payload.insight ||
-                            "Dynamic ensemble is updating ETA from live operating conditions."
+                        50% {
+                            opacity: 1;
+                            transform: scale(1.15);
                         }
-                        confidence={
-                            payload.model_confidence
+                    }
+
+                    @keyframes trainMove {
+                        0%, 100% {
+                            transform: translateX(-7px);
                         }
-                    />
-                )}
 
-                {/* =====================================================
-                    STATIONS AHEAD
-                ===================================================== */}
+                        50% {
+                            transform: translateX(7px);
+                        }
+                    }
 
-                {payload &&
-                    displayStations.length >
-                    0 && (
-                        <section className="rounded-3xl border border-white/10 bg-[#0f0f18] p-5">
+                    @keyframes slideUp {
+                        from {
+                            opacity: 0;
+                            transform: translateY(12px);
+                        }
 
-                            <div className="mb-5 flex justify-between">
+                        to {
+                            opacity: 1;
+                            transform: translateY(0);
+                        }
+                    }
 
-                                <h2 className="font-semibold">
-                                    Stations ahead
-                                </h2>
+                    @keyframes shimmer {
+                        0% {
+                            background-position: -600px 0;
+                        }
 
-                                <span className="text-xs text-white/40">
-                                    RailDrishri prediction
-                                </span>
+                        100% {
+                            background-position: 600px 0;
+                        }
+                    }
 
-                            </div>
+                    .rail-float {
+                        animation:
+                            railFloat 5s ease-in-out infinite;
+                    }
 
-                            <StationTimeline
-                                stations={
-                                    displayStations
-                                }
-                                predictions={
-                                    predictions
-                                }
-                                currentCode={
-                                    current
-                                }
-                                trainStarted={
-                                    selectedTrainRoute?.yet_to_start === true
-                                        ? false
-                                        : true
-                                }
-                            />
+                    .soft-pulse {
+                        animation:
+                            pulseSoft 2.3s ease-in-out infinite;
+                    }
 
-                        </section>
-                    )}
+                    .train-motion {
+                        animation:
+                            trainMove 2.5s ease-in-out infinite;
+                    }
 
+                    .slide-up {
+                        animation:
+                            slideUp .45s ease-out both;
+                    }
+
+                    .skeleton {
+                        background:
+                            linear-gradient(
+                                90deg,
+                                #eef2f7,
+                                #f8fafc,
+                                #eef2f7
+                            );
+
+                        background-size: 600px 100%;
+
+                        animation:
+                            shimmer 1.5s linear infinite;
+                    }
+
+                    .scrollbar-thin::-webkit-scrollbar {
+                        width: 5px;
+                        height: 5px;
+                    }
+
+                    .scrollbar-thin::-webkit-scrollbar-track {
+                        background: transparent;
+                    }
+
+                    .scrollbar-thin::-webkit-scrollbar-thumb {
+                        background: #d9e2ef;
+                        border-radius: 999px;
+                    }
+                `}
+            </style>
+
+            {/* =====================================================
+                BACKGROUND
+            ===================================================== */}
+
+            <div className="pointer-events-none fixed inset-0 overflow-hidden">
+                <div className="absolute -left-32 -top-32 h-[420px] w-[420px] rounded-full bg-blue-200/30 blur-[100px]" />
+
+                <div className="absolute right-[-100px] top-[20%] h-[420px] w-[420px] rounded-full bg-cyan-100/50 blur-[110px]" />
+
+                <div className="absolute bottom-[-150px] left-[30%] h-[420px] w-[420px] rounded-full bg-indigo-100/40 blur-[120px]" />
             </div>
 
+            <div className="relative mx-auto max-w-[1550px] px-4 py-4 sm:px-6 lg:px-8">
+                {/* =================================================
+                    HEADER
+                ================================================= */}
+
+                <header className="slide-up mb-5 rounded-[30px] border border-slate-200/80 bg-white/95 p-4 shadow-[0_15px_50px_rgba(15,23,42,.07)] backdrop-blur-xl">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                        <div className="flex items-center gap-4">
+                            <div className="rail-float relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-500 text-2xl text-white shadow-lg shadow-blue-500/20">
+                                🚆
+
+                                <span className="absolute -right-1 -top-1 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-400" />
+                            </div>
+
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[11px] font-extrabold tracking-[.3em] text-blue-600">
+                                        RAILSAATHI
+                                    </span>
+
+                                    <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[8px] font-bold text-blue-600">
+                                        AI
+                                    </span>
+                                </div>
+
+                                <h1 className="mt-1 text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
+                                    Railway Intelligence Platform
+                                </h1>
+
+                                <p className="mt-1 text-xs text-slate-400">
+                                    Live movement • Predictive ETA • Intelligent railway insights
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <span className="flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-600">
+                                <span className="soft-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                SYSTEM ONLINE
+                            </span>
+                        </div>
+                    </div>
+                </header>
+
+                {/* =================================================
+                    SEARCH AREA
+                ================================================= */}
+
+                <section className="slide-up mb-5 rounded-[28px] border border-slate-200 bg-white p-4 shadow-[0_12px_40px_rgba(15,23,42,.05)]">
+                    <div className="grid gap-4 lg:grid-cols-[1fr_1.7fr_auto]">
+                        {/* MONITORING STATION */}
+                        <div className="relative">
+                            <label className="mb-2 block px-1 text-[9px] font-extrabold uppercase tracking-[.2em] text-slate-400">
+                                Monitoring station
+                            </label>
+
+                            <div className="flex items-center rounded-2xl border border-slate-200 bg-slate-50 transition focus-within:border-blue-400 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-50">
+                                <span className="pl-4 text-lg">
+                                    📍
+                                </span>
+
+                                <input
+                                    value={
+                                        stationInput
+                                    }
+                                    onChange={(
+                                        event,
+                                    ) =>
+                                        setStationInput(
+                                            event
+                                                .target
+                                                .value,
+                                        )
+                                    }
+                                    onKeyDown={
+                                        handleStationKeyDown
+                                    }
+                                    placeholder="Search station..."
+                                    className="h-[54px] min-w-0 flex-1 bg-transparent px-3 text-sm font-semibold text-slate-700 outline-none placeholder:text-slate-300"
+                                />
+
+                                <button
+                                    type="button"
+                                    onClick={
+                                        handleStationSearch
+                                    }
+                                    disabled={
+                                        !stationInput.trim() ||
+                                        loadingStation
+                                    }
+                                    className="mr-2 flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-30"
+                                >
+                                    →
+                                </button>
+                            </div>
+
+                            {stationInput.trim() &&
+                                !selectedStation && (
+                                    <div className="absolute left-0 right-0 top-[78px] z-50 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_60px_rgba(15,23,42,.15)]">
+                                        {stationSuggestions
+                                            .slice(
+                                                0,
+                                                6,
+                                            )
+                                            .map(
+                                                (
+                                                    station,
+                                                ) => (
+                                                    <button
+                                                        key={
+                                                            station.code
+                                                        }
+                                                        type="button"
+                                                        onClick={() =>
+                                                            selectStation(
+                                                                station,
+                                                            )
+                                                        }
+                                                        className="flex w-full items-center justify-between rounded-xl px-3 py-3 text-left transition hover:bg-blue-50"
+                                                    >
+                                                        <div>
+                                                            <p className="text-xs font-extrabold text-slate-700">
+                                                                {
+                                                                    station.name
+                                                                }
+                                                            </p>
+
+                                                            <p className="mt-1 text-[8px] font-bold uppercase tracking-wider text-slate-400">
+                                                                {
+                                                                    station.code
+                                                                }
+                                                            </p>
+                                                        </div>
+
+                                                        <span className="text-blue-500">
+                                                            →
+                                                        </span>
+                                                    </button>
+                                                ),
+                                            )}
+                                    </div>
+                                )}
+                        </div>
+
+                        {/* TRAIN SEARCH */}
+                        <div>
+                            <label className="mb-2 block px-1 text-[9px] font-extrabold uppercase tracking-[.2em] text-slate-400">
+                                Search train
+                            </label>
+
+                            <div className="flex h-[54px] items-center rounded-2xl border border-slate-200 bg-slate-50 px-4 transition focus-within:border-blue-400 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-50">
+                                <span className="mr-3 text-lg text-slate-400">
+                                    ⌕
+                                </span>
+
+                                <input
+                                    value={
+                                        trainSearch
+                                    }
+                                    onChange={(
+                                        event,
+                                    ) =>
+                                        setTrainSearch(
+                                            event
+                                                .target
+                                                .value,
+                                        )
+                                    }
+                                    placeholder="Train number, train name or destination..."
+                                    className="min-w-0 flex-1 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-300"
+                                />
+                            </div>
+                        </div>
+
+                        {/* REFRESH */}
+                        <div className="flex items-end">
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    selectedStation &&
+                                    void loadStationBoard(
+                                        selectedStation,
+                                    )
+                                }
+                                disabled={
+                                    !selectedStation ||
+                                    loadingStation
+                                }
+                                className="h-[54px] w-full rounded-2xl border border-slate-200 bg-white px-6 text-xs font-bold text-slate-500 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40 lg:w-auto"
+                            >
+                                {loadingStation
+                                    ? "Updating..."
+                                    : "↻ Refresh"}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* QUICK STATIONS */}
+                    <div className="mt-4 flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+                        {STATION_OPTIONS.slice(
+                            0,
+                            7,
+                        ).map(
+                            (station) => {
+                                const active =
+                                    selectedStation ===
+                                    station.code;
+
+                                return (
+                                    <button
+                                        key={
+                                            station.code
+                                        }
+                                        type="button"
+                                        onClick={() =>
+                                            selectStation(
+                                                station,
+                                            )
+                                        }
+                                        className={`shrink-0 rounded-xl border px-4 py-2.5 text-left transition-all ${
+                                            active
+                                                ? "border-blue-500 bg-blue-600 text-white shadow-lg shadow-blue-500/20"
+                                                : "border-slate-200 bg-white text-slate-600 hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50"
+                                        }`}
+                                    >
+                                        <div className="text-xs font-black">
+                                            {
+                                                station.code
+                                            }
+                                        </div>
+
+                                        <div
+                                            className={`mt-0.5 text-[9px] ${
+                                                active
+                                                    ? "text-blue-100"
+                                                    : "text-slate-400"
+                                            }`}
+                                        >
+                                            {
+                                                station.name
+                                            }
+                                        </div>
+                                    </button>
+                                );
+                            },
+                        )}
+                    </div>
+
+                    {stationError && (
+                        <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-600">
+                            {stationError}
+                        </div>
+                    )}
+                </section>
+
+                {/* =================================================
+                    NO STATION
+                ================================================= */}
+
+                {!selectedStation && (
+                    <>
+                        <section className="slide-up relative overflow-hidden rounded-[34px] border border-blue-100 bg-white shadow-[0_25px_80px_rgba(30,64,175,.08)]">
+                            <div className="absolute right-[-80px] top-[-100px] h-[360px] w-[360px] rounded-full bg-blue-100/60 blur-[80px]" />
+
+                            <div className="absolute bottom-[-100px] left-[25%] h-[280px] w-[280px] rounded-full bg-cyan-100/60 blur-[90px]" />
+
+                            <div className="relative grid gap-10 p-6 sm:p-10 lg:grid-cols-[1.2fr_.8fr] lg:items-center lg:p-12">
+                                <div>
+                                    <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5">
+                                        <span className="soft-pulse h-1.5 w-1.5 rounded-full bg-blue-500" />
+
+                                        <span className="text-[9px] font-extrabold uppercase tracking-[.2em] text-blue-600">
+                                            Live railway intelligence
+                                        </span>
+                                    </div>
+
+                                    <h2 className="mt-5 max-w-2xl text-4xl font-extrabold leading-[1.05] tracking-[-.04em] text-slate-900 sm:text-5xl lg:text-6xl">
+                                        Your train.
+
+                                        <span className="block bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 bg-clip-text text-transparent">
+                                            Smarter than ever.
+                                        </span>
+                                    </h2>
+
+                                    <p className="mt-5 max-w-xl text-sm leading-7 text-slate-500 sm:text-base">
+                                        Search for a railway station to see live train movement, delay status and RailSaathi's AI-powered arrival predictions.
+                                    </p>
+
+                                    <div className="mt-8 flex items-center justify-between">
+                                        <div className="h-4 w-4 rounded-full border-4 border-white bg-blue-500 shadow-md" />
+
+                                        <div className="train-motion rounded-full bg-blue-600 px-5 py-2.5 text-white shadow-lg shadow-blue-500/20">
+                                            🚆
+                                        </div>
+
+                                        <div className="h-4 w-4 rounded-full border-4 border-white bg-cyan-500 shadow-md" />
+                                    </div>
+                                </div>
+
+                                {/* SELECT STATION */}
+                                <div className="rounded-[30px] border border-slate-200 bg-white p-5 shadow-[0_20px_60px_rgba(15,23,42,.08)] sm:p-7">
+                                    <p className="text-[9px] font-extrabold uppercase tracking-[.22em] text-blue-600">
+                                        Start monitoring
+                                    </p>
+
+                                    <h3 className="mt-2 text-2xl font-bold text-slate-900">
+                                        Choose a station
+                                    </h3>
+
+                                    <p className="mt-2 text-xs leading-5 text-slate-400">
+                                        Select or search a station. The selected station becomes the monitoring station.
+                                    </p>
+
+                                    <div className="mt-6">
+                                        <select
+                                            value={
+                                                selectedStation
+                                            }
+                                            onChange={
+                                                handleStationChange
+                                            }
+                                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700 outline-none focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50"
+                                        >
+                                            <option
+                                                value=""
+                                            >
+                                                Select station
+                                            </option>
+
+                                            {STATION_OPTIONS.map(
+                                                (
+                                                    station,
+                                                ) => (
+                                                    <option
+                                                        key={
+                                                            station.code
+                                                        }
+                                                        value={
+                                                            station.code
+                                                        }
+                                                    >
+                                                        {
+                                                            station.name
+                                                        }{" "}
+                                                        (
+                                                        {
+                                                            station.code
+                                                        }
+                                                        )
+                                                    </option>
+                                                ),
+                                            )}
+                                        </select>
+                                    </div>
+
+                                    <div className="my-5 flex items-center gap-3">
+                                        <div className="h-px flex-1 bg-slate-100" />
+
+                                        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-300">
+                                            or search
+                                        </span>
+
+                                        <div className="h-px flex-1 bg-slate-100" />
+                                    </div>
+
+                                    <div className="flex gap-2">
+                                        <input
+                                            value={
+                                                stationInput
+                                            }
+                                            onChange={(
+                                                event,
+                                            ) =>
+                                                setStationInput(
+                                                    event
+                                                        .target
+                                                        .value,
+                                                )
+                                            }
+                                            onKeyDown={
+                                                handleStationKeyDown
+                                            }
+                                            placeholder="NJP, HWH, RPH..."
+                                            className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-sm font-semibold uppercase text-slate-700 outline-none placeholder:text-slate-300 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-50"
+                                        />
+
+                                        <button
+                                            type="button"
+                                            onClick={
+                                                handleStationSearch
+                                            }
+                                            disabled={
+                                                !stationInput.trim()
+                                            }
+                                            className="rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-6 py-3.5 text-sm font-bold text-white shadow-lg shadow-blue-500/20 disabled:opacity-40"
+                                        >
+                                            →
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* WEATHER WHEN NO STATION */}
+                        <section className="mt-5 rounded-[28px] border border-sky-100 bg-white p-5 shadow-sm">
+                            <div className="flex items-center gap-4">
+                                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-50 text-2xl">
+                                    ☁️
+                                </div>
+
+                                <div>
+                                    <p className="text-[9px] font-extrabold uppercase tracking-[.2em] text-sky-600">
+                                        Weather intelligence
+                                    </p>
+
+                                    <h3 className="mt-1 text-sm font-black text-slate-800">
+                                        Weather details unavailable
+                                    </h3>
+
+                                    <p className="mt-1 text-xs text-slate-400">
+                                        Weather data is not connected to the current demo environment.
+                                    </p>
+                                </div>
+                            </div>
+                        </section>
+                    </>
+                )}
+
+                {/* =================================================
+                    STATION DASHBOARD
+                ================================================= */}
+
+                {selectedStation && (
+                    <>
+                        {/* MOBILE TABS */}
+                        <div className="mb-4 flex rounded-2xl border border-slate-200 bg-white p-1 shadow-sm lg:hidden">
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setMobileTab(
+                                        "board",
+                                    )
+                                }
+                                className={`flex-1 rounded-xl px-4 py-2.5 text-xs font-bold ${
+                                    mobileTab ===
+                                    "board"
+                                        ? "bg-blue-600 text-white"
+                                        : "text-slate-400"
+                                }`}
+                            >
+                                Station Board
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    setMobileTab(
+                                        "details",
+                                    )
+                                }
+                                className={`flex-1 rounded-xl px-4 py-2.5 text-xs font-bold ${
+                                    mobileTab ===
+                                    "details"
+                                        ? "bg-blue-600 text-white"
+                                        : "text-slate-400"
+                                }`}
+                            >
+                                Train Intelligence
+                            </button>
+                        </div>
+
+                        <div className="grid gap-5 lg:grid-cols-[390px_minmax(0,1fr)]">
+                            {/* =================================================
+                                STATION BOARD
+                            ================================================= */}
+
+                            <section
+                                className={`${
+                                    mobileTab ===
+                                    "details"
+                                        ? "hidden lg:block"
+                                        : ""
+                                } overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_15px_50px_rgba(15,23,42,.06)]`}
+                            >
+                                <div className="border-b border-slate-100 px-5 py-5">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div className="flex items-center gap-2">
+                                                <span className="soft-pulse h-2 w-2 rounded-full bg-emerald-500" />
+
+                                                <p className="text-[9px] font-extrabold uppercase tracking-[.22em] text-emerald-600">
+                                                    Live station board
+                                                </p>
+                                            </div>
+
+                                            <h2 className="mt-2 text-xl font-extrabold text-slate-900">
+                                                {getStationName(
+                                                    selectedStation,
+                                                    stationData,
+                                                )}
+                                            </h2>
+
+                                            <p className="mt-1 text-[10px] text-slate-400">
+                                                {
+                                                    selectedStation
+                                                }{" "}
+                                                • Live railway services
+                                            </p>
+                                        </div>
+
+                                        <div className="rounded-2xl bg-slate-50 px-3 py-2 text-right">
+                                            <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">
+                                                Services
+                                            </p>
+
+                                            <p className="mt-1 text-lg font-extrabold text-slate-800">
+                                                {
+                                                    stationData?.total_trains ??
+                                                    0
+                                                }
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-[1fr_64px_70px] border-b border-slate-100 bg-slate-50/70 px-4 py-2.5 text-[8px] font-extrabold uppercase tracking-[.18em] text-slate-300">
+                                    <span>
+                                        Train
+                                    </span>
+
+                                    <span className="text-right">
+                                        Time
+                                    </span>
+
+                                    <span className="text-right">
+                                        Delay
+                                    </span>
+                                </div>
+
+                                {loadingStation && (
+                                    <div className="space-y-2 p-3">
+                                        {Array.from(
+                                            {
+                                                length: 7,
+                                            },
+                                        ).map(
+                                            (
+                                                _,
+                                                index,
+                                            ) => (
+                                                <div
+                                                    key={
+                                                        index
+                                                    }
+                                                    className="skeleton h-[82px] rounded-2xl"
+                                                />
+                                            ),
+                                        )}
+                                    </div>
+                                )}
+
+                                {!loadingStation &&
+                                    filteredTrains.length ===
+                                        0 && (
+                                        <div className="px-6 py-16 text-center">
+                                            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-50 text-xl text-slate-300">
+                                                ⌕
+                                            </div>
+
+                                            <p className="mt-4 text-sm font-bold text-slate-600">
+                                                No trains found
+                                            </p>
+
+                                            <p className="mt-1 text-xs text-slate-400">
+                                                Try another train number or destination.
+                                            </p>
+                                        </div>
+                                    )}
+
+                                {!loadingStation &&
+                                    filteredTrains.length >
+                                        0 && (
+                                        <div className="max-h-[760px] space-y-1.5 overflow-y-auto p-2.5 scrollbar-thin">
+                                            {filteredTrains.map(
+                                                (
+                                                    train: any,
+                                                    index: number,
+                                                ) => {
+                                                    const number =
+                                                        normalizeTrainNumber(
+                                                            train?.train_no,
+                                                        );
+
+                                                    const selected =
+                                                        selectedTrain ===
+                                                        number;
+
+                                                    const delay =
+                                                        Number(
+                                                            train?.arrival_delay ??
+                                                                train?.departure_delay ??
+                                                                0,
+                                                        );
+
+                                                    return (
+                                                        <button
+                                                            key={`${number}-${index}`}
+                                                            type="button"
+                                                            onClick={() =>
+                                                                void handleTrainClick(
+                                                                    train,
+                                                                )
+                                                            }
+                                                            style={{
+                                                                animationDelay: `${Math.min(index, 8) * 35}ms`,
+                                                            }}
+                                                            className={`slide-up group relative w-full overflow-hidden rounded-2xl border p-3.5 text-left transition-all ${
+                                                                selected
+                                                                    ? "border-blue-200 bg-blue-50/80 shadow-md shadow-blue-100"
+                                                                    : "border-transparent bg-white hover:-translate-y-0.5 hover:border-slate-200 hover:bg-slate-50"
+                                                            }`}
+                                                        >
+                                                            {selected && (
+                                                                <div className="absolute bottom-0 left-0 top-0 w-1 bg-gradient-to-b from-blue-500 to-cyan-400" />
+                                                            )}
+
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="text-sm font-extrabold text-slate-800">
+                                                                            {
+                                                                                number
+                                                                            }
+                                                                        </span>
+
+                                                                        {selected && (
+                                                                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[7px] font-extrabold uppercase tracking-wider text-blue-600">
+                                                                                Selected
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+
+                                                                    <p className="mt-1 truncate text-[10px] text-slate-400">
+                                                                        {train?.train_name ||
+                                                                            "Rail service"}
+                                                                    </p>
+
+                                                                    <p className="mt-1 truncate text-[9px] text-slate-300">
+                                                                        {train?.source_name ||
+                                                                            train?.source ||
+                                                                            "Unknown"}{" "}
+                                                                        →
+                                                                        {train?.destination_name ||
+                                                                            train?.destination ||
+                                                                            "Unknown"}
+                                                                    </p>
+                                                                </div>
+
+                                                                <div className="shrink-0 text-right">
+                                                                    <p className="text-base font-extrabold text-slate-800">
+                                                                        {train?.eta ||
+                                                                            train?.etd ||
+                                                                            train?.scheduled_arrival ||
+                                                                            "—"}
+                                                                    </p>
+
+                                                                    <p className="mt-1 text-[8px] font-bold text-slate-300">
+                                                                        PF{" "}
+                                                                        {train?.platform ||
+                                                                            "—"}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2.5">
+                                                                <span className="text-[8px] font-bold uppercase tracking-[.16em] text-slate-300">
+                                                                    {train?.train_type ||
+                                                                        "Passenger"}
+                                                                </span>
+
+                                                                <span
+                                                                    className={`rounded-full border px-2.5 py-1 text-[8px] font-extrabold ${delayBadgeClass(
+                                                                        delay,
+                                                                    )}`}
+                                                                >
+                                                                    {formatDelay(
+                                                                        delay,
+                                                                    )}
+                                                                </span>
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                },
+                                            )}
+                                        </div>
+                                    )}
+
+                                <div className="border-t border-slate-100 bg-slate-50/60 px-5 py-3">
+                                    <div className="flex items-center justify-between text-[8px] font-bold text-slate-300">
+                                        <span>
+                                            SOURCE:{" "}
+                                            {
+                                                sourceLabel
+                                            }
+                                        </span>
+
+                                        <span>
+                                            {lastUpdated
+                                                ? `UPDATED ${lastUpdated}`
+                                                : "WAITING"}
+                                        </span>
+                                    </div>
+                                </div>
+                            </section>
+
+                            {/* =================================================
+                                TRAIN INTELLIGENCE
+                            ================================================= */}
+
+                            <section
+                                className={`${
+                                    mobileTab ===
+                                    "board"
+                                        ? "hidden lg:block"
+                                        : ""
+                                } space-y-5`}
+                            >
+                                {/* NO TRAIN */}
+                                {!selectedTrain && (
+                                    <section className="relative flex min-h-[580px] items-center justify-center overflow-hidden rounded-[34px] border border-slate-200 bg-white shadow-[0_20px_70px_rgba(15,23,42,.06)]">
+                                        <div className="absolute left-1/2 top-1/2 h-80 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-100/60 blur-[100px]" />
+
+                                        <div className="relative max-w-lg px-8 text-center">
+                                            <div className="rail-float mx-auto flex h-20 w-20 items-center justify-center rounded-[26px] bg-gradient-to-br from-blue-600 to-cyan-500 text-4xl text-white shadow-xl shadow-blue-200">
+                                                🚆
+                                            </div>
+
+                                            <p className="mt-7 text-[10px] font-extrabold uppercase tracking-[.25em] text-blue-600">
+                                                RailSaathi Intelligence
+                                            </p>
+
+                                            <h2 className="mt-3 text-3xl font-extrabold text-slate-900">
+                                                Select a train
+                                            </h2>
+
+                                            <p className="mt-3 text-sm leading-7 text-slate-400">
+                                                Choose a service from the live station board to see its current railway status, ETA prediction and AI insights.
+                                            </p>
+
+                                            <div className="mt-7 grid grid-cols-3 gap-2">
+                                                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                                    <p className="text-xl text-blue-500">
+                                                        ◉
+                                                    </p>
+
+                                                    <p className="mt-2 text-[8px] font-extrabold uppercase tracking-wider text-slate-400">
+                                                        Live
+                                                    </p>
+                                                </div>
+
+                                                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                                    <p className="text-xl text-indigo-500">
+                                                        ◇
+                                                    </p>
+
+                                                    <p className="mt-2 text-[8px] font-extrabold uppercase tracking-wider text-slate-400">
+                                                        Predict
+                                                    </p>
+                                                </div>
+
+                                                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                                    <p className="text-xl text-cyan-500">
+                                                        ✦
+                                                    </p>
+
+                                                    <p className="mt-2 text-[8px] font-extrabold uppercase tracking-wider text-slate-400">
+                                                        Explain
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </section>
+                                )}
+
+                                {/* SELECTED TRAIN */}
+                                {selectedTrain && (
+                                    <>
+                                        {/* TRAIN HEADER */}
+                                        <section className="slide-up overflow-hidden rounded-[34px] border border-blue-100 bg-gradient-to-br from-white via-blue-50/40 to-cyan-50/50 p-6 shadow-[0_20px_70px_rgba(37,99,235,.08)] sm:p-7">
+                                            <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+                                                <div>
+                                                    <span className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-[8px] font-extrabold uppercase tracking-[.18em] text-blue-600">
+                                                        Train intelligence
+                                                    </span>
+
+                                                    <h2 className="mt-4 text-5xl font-extrabold tracking-[-.05em] text-slate-900 sm:text-6xl">
+                                                        {
+                                                            selectedTrain
+                                                        }
+                                                    </h2>
+
+                                                    <p className="mt-2 text-lg font-semibold text-slate-400">
+                                                        {
+                                                            trainName
+                                                        }
+                                                    </p>
+
+                                                    <div className="mt-4 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
+                                                        <span>
+                                                            {selectedBoardTrain?.source_name ||
+                                                                "Origin"}
+                                                        </span>
+
+                                                        <span className="font-bold text-blue-500">
+                                                            →
+                                                        </span>
+
+                                                        <span>
+                                                            {destinationStation?.station_name ||
+                                                                selectedBoardTrain?.destination_name ||
+                                                                "Destination"}
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="mt-4 inline-flex items-center gap-2 rounded-xl border border-blue-100 bg-white px-3 py-2 text-[9px] font-bold text-blue-600 shadow-sm">
+                                                        <span className="soft-pulse h-2 w-2 rounded-full bg-blue-500" />
+
+                                                        Monitoring:{" "}
+                                                        {
+                                                            getStationName(
+                                                                selectedStation,
+                                                                stationData,
+                                                            )
+                                                        }{" "}
+                                                        (
+                                                        {
+                                                            selectedStation
+                                                        }
+                                                        )
+                                                    </div>
+                                                </div>
+
+                                                <div className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm">
+                                                    <p className="text-[9px] font-extrabold uppercase tracking-[.2em] text-slate-400">
+                                                        Current delay
+                                                    </p>
+
+                                                    <div className="mt-2 flex items-baseline gap-2">
+                                                        <span
+                                                            className={`text-5xl font-extrabold ${delayClass(
+                                                                currentDelay,
+                                                            )}`}
+                                                        >
+                                                            {currentDelay >
+                                                            0
+                                                                ? "+"
+                                                                : ""}
+                                                            {Math.round(
+                                                                currentDelay,
+                                                            )}
+                                                        </span>
+
+                                                        <span className="text-sm text-slate-300">
+                                                            min
+                                                        </span>
+                                                    </div>
+
+                                                    <p
+                                                        className={`mt-2 text-[9px] font-extrabold uppercase tracking-[.18em] ${delayClass(
+                                                            currentDelay,
+                                                        )}`}
+                                                    >
+                                                        {delayLabel(
+                                                            currentDelay,
+                                                        )}
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-7 grid gap-3 sm:grid-cols-3">
+                                                <div className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm">
+                                                    <p className="text-[8px] font-extrabold uppercase tracking-[.18em] text-slate-400">
+                                                        Current location
+                                                    </p>
+
+                                                    <p className="mt-2 truncate text-sm font-extrabold text-slate-800">
+                                                        {
+                                                            currentStationName
+                                                        }
+                                                    </p>
+
+                                                    <p className="mt-1 text-[9px] text-slate-400">
+                                                        {
+                                                            current
+                                                        }
+                                                    </p>
+                                                </div>
+
+                                                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                                    <p className="text-[8px] font-extrabold uppercase tracking-[.18em] text-slate-400">
+                                                        Next station
+                                                    </p>
+
+                                                    <p className="mt-2 truncate text-sm font-extrabold text-slate-800">
+                                                        {nextStation?.station_name ||
+                                                            "Unavailable"}
+                                                    </p>
+
+                                                    <p className="mt-1 text-[9px] text-slate-400">
+                                                        {nextStation?.station_code ||
+                                                            "—"}
+                                                    </p>
+                                                </div>
+
+                                                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                                    <p className="text-[8px] font-extrabold uppercase tracking-[.18em] text-slate-400">
+                                                        Destination
+                                                    </p>
+
+                                                    <p className="mt-2 truncate text-sm font-extrabold text-slate-800">
+                                                        {destinationStation?.station_name ||
+                                                            selectedBoardTrain?.destination_name ||
+                                                            "Unavailable"}
+                                                    </p>
+
+                                                    <p className="mt-1 text-[9px] text-slate-400">
+                                                        {destinationStation?.station_code ||
+                                                            selectedBoardTrain?.destination ||
+                                                            "—"}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </section>
+
+                                        {/* WEATHER */}
+                                        <section className="slide-up rounded-[30px] border border-sky-100 bg-gradient-to-r from-sky-50 via-white to-cyan-50 p-5 shadow-sm sm:p-6">
+                                            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-2xl shadow-sm">
+                                                        ☁️
+                                                    </div>
+
+                                                    <div>
+                                                        <p className="text-[9px] font-extrabold uppercase tracking-[.2em] text-sky-600">
+                                                            Weather intelligence
+                                                        </p>
+
+                                                        <h3 className="mt-1 text-lg font-extrabold text-slate-800">
+                                                            Weather details unavailable
+                                                        </h3>
+
+                                                        <p className="mt-1 text-xs text-slate-400">
+                                                            Weather feed is not connected to the current demo environment.
+                                                        </p>
+                                                    </div>
+                                                </div>
+
+                                                <span className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[8px] font-extrabold uppercase tracking-wider text-slate-400">
+                                                    NOT AVAILABLE
+                                                </span>
+                                            </div>
+
+                                            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                                                {[
+                                                    "Temperature",
+                                                    "Rain",
+                                                    "Visibility",
+                                                ].map(
+                                                    (
+                                                        item,
+                                                    ) => (
+                                                        <div
+                                                            key={
+                                                                item
+                                                            }
+                                                            className="rounded-2xl border border-sky-100 bg-white/80 p-4"
+                                                        >
+                                                            <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">
+                                                                {
+                                                                    item
+                                                                }
+                                                            </p>
+
+                                                            <p className="mt-2 text-lg font-extrabold text-slate-400">
+                                                                —
+                                                            </p>
+                                                        </div>
+                                                    ),
+                                                )}
+                                            </div>
+                                        </section>
+
+                                        {/* ERROR */}
+                                        {selectedTrainError && (
+                                            <section className="slide-up rounded-[28px] border border-amber-200 bg-amber-50 p-5">
+                                                <div className="flex gap-4">
+                                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-amber-500">
+                                                        !
+                                                    </div>
+
+                                                    <div>
+                                                        <p className="text-sm font-extrabold text-amber-700">
+                                                            Railway data temporarily unavailable
+                                                        </p>
+
+                                                        <p className="mt-1 text-xs leading-5 text-amber-600/70">
+                                                            {
+                                                                selectedTrainError
+                                                            }
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        )}
+
+                                        {/* ETA CARD */}
+                                        {payload?.predictions?.[0] && (
+                                            <section className="slide-up rounded-[30px] border border-blue-100 bg-white p-6 shadow-sm">
+                                                <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+                                                    <div>
+                                                        <p className="text-[9px] font-extrabold uppercase tracking-[.22em] text-blue-600">
+                                                            Predictive ETA
+                                                        </p>
+
+                                                        <h3 className="mt-2 text-3xl font-extrabold text-slate-900">
+                                                            {formatClock(
+                                                                payload
+                                                                    .predictions[0]
+                                                                    ?.eta,
+                                                            )}
+                                                        </h3>
+
+                                                        <p className="mt-2 text-xs text-slate-400">
+                                                            Predicted arrival at{" "}
+                                                            {payload
+                                                                .predictions[0]
+                                                                ?.station
+                                                                ?.name ||
+                                                                "next station"}
+                                                        </p>
+                                                    </div>
+
+                                                    <div className="rounded-2xl bg-blue-50 px-6 py-4 text-center">
+                                                        <p className="text-[8px] font-extrabold uppercase tracking-widest text-blue-400">
+                                                            Predicted delay
+                                                        </p>
+
+                                                        <p
+                                                            className={`mt-1 text-2xl font-extrabold ${delayClass(
+                                                                payload
+                                                                    .predictions[0]
+                                                                    ?.delay_minutes,
+                                                            )}`}
+                                                        >
+                                                            {formatDelay(
+                                                                payload
+                                                                    .predictions[0]
+                                                                    ?.delay_minutes,
+                                                            )}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        )}
+
+                                        {/* JOURNEY PROGRESS */}
+                                        {routeStations.length >
+                                            0 && (
+                                            <section className="rounded-[30px] border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                                                <div className="flex items-end justify-between gap-4">
+                                                    <div>
+                                                        <p className="text-[9px] font-extrabold uppercase tracking-[.22em] text-slate-400">
+                                                            Journey progress
+                                                        </p>
+
+                                                        <h3 className="mt-2 text-xl font-extrabold text-slate-800">
+                                                            {
+                                                                currentStationName
+                                                            }
+                                                        </h3>
+
+                                                        <p className="mt-1 text-[10px] text-slate-400">
+                                                            {Math.round(
+                                                                currentDistance,
+                                                            )}{" "}
+                                                            km of{" "}
+                                                            {Math.round(
+                                                                totalDistance,
+                                                            )}{" "}
+                                                            km
+                                                        </p>
+                                                    </div>
+
+                                                    <p className="text-4xl font-extrabold text-blue-600">
+                                                        {Math.round(
+                                                            progress,
+                                                        )}
+                                                        %
+                                                    </p>
+                                                </div>
+
+                                                <div className="relative mt-7">
+                                                    <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                                                        <div
+                                                            className="h-full rounded-full bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-400 transition-all duration-1000"
+                                                            style={{
+                                                                width: `${progress}%`,
+                                                            }}
+                                                        />
+                                                    </div>
+
+                                                    <div
+                                                        className="soft-pulse absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-4 border-white bg-cyan-500 shadow-lg"
+                                                        style={{
+                                                            left: `${progress}%`,
+                                                        }}
+                                                    />
+                                                </div>
+
+                                                <div className="mt-3 flex justify-between text-[9px] font-semibold text-slate-300">
+                                                    <span>
+                                                        Origin
+                                                    </span>
+
+                                                    <span>
+                                                        Destination
+                                                    </span>
+                                                </div>
+                                            </section>
+                                        )}
+
+                                        {/* =================================================
+                                            FIXED UPCOMING STATIONS
+                                            
+                                            THIS IS THE IMPORTANT FIX.
+                                            
+                                            No min-height.
+                                            No justify-between.
+                                            No huge empty space.
+                                            Stations render immediately.
+                                        ================================================= */}
+
+                                        {routeStations.length >
+                                            0 && (
+                                            <section className="slide-up overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-sm">
+                                                <div className="border-b border-slate-100 px-5 py-5 sm:px-6">
+                                                    <div className="flex items-center justify-between gap-4">
+                                                        <div>
+                                                            <p className="text-[9px] font-extrabold uppercase tracking-[.22em] text-blue-500">
+                                                                Route intelligence
+                                                            </p>
+
+                                                            <h3 className="mt-1 text-xl font-extrabold text-slate-800">
+                                                                Upcoming stations
+                                                            </h3>
+
+                                                            <p className="mt-1 text-xs text-slate-400">
+                                                                Live route position and predicted arrival timings
+                                                            </p>
+                                                        </div>
+
+                                                        <span className="shrink-0 rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-[8px] font-extrabold uppercase tracking-wider text-blue-600">
+                                                            FORECAST
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                {/* COMPACT TIMELINE */}
+                                                <div className="px-5 py-5 sm:px-6">
+                                                    {upcomingStations.length ===
+                                                        0 && (
+                                                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-8 text-center">
+                                                            <p className="text-sm font-bold text-slate-500">
+                                                                Route information unavailable
+                                                            </p>
+
+                                                            <p className="mt-1 text-xs text-slate-400">
+                                                                RailSaathi could not load the station sequence for this train.
+                                                            </p>
+                                                        </div>
+                                                    )}
+
+                                                    <div className="space-y-3">
+                                                        {upcomingStations.map(
+                                                            (
+                                                                item,
+                                                                index,
+                                                            ) => {
+                                                                const station =
+                                                                    item.station;
+
+                                                                const prediction =
+                                                                    item.prediction;
+
+                                                                const code =
+                                                                    safeString(
+                                                                        station?.station_code,
+                                                                    ).toUpperCase();
+
+                                                                const delay =
+                                                                    prediction
+                                                                        ? Number(
+                                                                              prediction?.delay_minutes ??
+                                                                                  0,
+                                                                          )
+                                                                        : Number(
+                                                                              station?.arrival_delay ??
+                                                                                  station?.departure_delay ??
+                                                                                  0,
+                                                                          );
+
+                                                                const scheduled =
+                                                                    station?.scheduled_arrival ||
+                                                                    station?.sta ||
+                                                                    null;
+
+                                                                const predicted =
+                                                                    prediction?.eta ||
+                                                                    null;
+
+                                                                return (
+                                                                    <div
+                                                                        key={`${code}-${index}`}
+                                                                        className={`relative flex gap-4 rounded-2xl border p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${
+                                                                            item.isCurrent
+                                                                                ? "border-blue-200 bg-blue-50/60"
+                                                                                : "border-slate-100 bg-white"
+                                                                        }`}
+                                                                    >
+                                                                        {/* LINE */}
+                                                                        <div className="relative flex w-7 shrink-0 justify-center">
+                                                                            {index <
+                                                                                upcomingStations.length -
+                                                                                    1 && (
+                                                                                <div className="absolute left-1/2 top-7 h-[calc(100%+12px)] w-px -translate-x-1/2 bg-slate-200" />
+                                                                            )}
+
+                                                                            <div
+                                                                                className={`relative z-10 mt-1 h-4 w-4 rounded-full border-4 border-white shadow-sm ${
+                                                                                    item.isCurrent
+                                                                                        ? "bg-blue-500 shadow-blue-200"
+                                                                                        : "bg-slate-300"
+                                                                                }`}
+                                                                            />
+                                                                        </div>
+
+                                                                        {/* STATION */}
+                                                                        <div className="min-w-0 flex-1">
+                                                                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                                                                <div className="min-w-0">
+                                                                                    <div className="flex flex-wrap items-center gap-2">
+                                                                                        <h4 className="truncate text-sm font-extrabold text-slate-800">
+                                                                                            {station?.station_name ||
+                                                                                                code ||
+                                                                                                "Unknown station"}
+                                                                                        </h4>
+
+                                                                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[8px] font-extrabold text-slate-400">
+                                                                                            {
+                                                                                                code
+                                                                                            }
+                                                                                        </span>
+
+                                                                                        {item.isCurrent && (
+                                                                                            <span className="rounded-full border border-blue-100 bg-blue-50 px-2 py-1 text-[7px] font-extrabold uppercase tracking-wider text-blue-600">
+                                                                                                CURRENT
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </div>
+
+                                                                                    <p className="mt-1 text-[9px] text-slate-400">
+                                                                                        {station?.distance !=
+                                                                                        null
+                                                                                            ? `${Math.round(Number(station.distance))} km from origin`
+                                                                                            : "Railway station"}
+                                                                                    </p>
+                                                                                </div>
+
+                                                                                <div className="shrink-0 sm:text-right">
+                                                                                    <p className="text-[8px] font-extrabold uppercase tracking-wider text-slate-300">
+                                                                                        Predicted
+                                                                                    </p>
+
+                                                                                    <p className="mt-1 text-lg font-extrabold text-blue-600">
+                                                                                        {formatClock(
+                                                                                            predicted ||
+                                                                                                scheduled,
+                                                                                        )}
+                                                                                    </p>
+                                                                                </div>
+                                                                            </div>
+
+                                                                            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                                                                                <div className="rounded-xl bg-slate-50 px-3 py-2.5">
+                                                                                    <p className="text-[7px] font-extrabold uppercase tracking-wider text-slate-300">
+                                                                                        Scheduled
+                                                                                    </p>
+
+                                                                                    <p className="mt-1 text-[11px] font-bold text-slate-500">
+                                                                                        {formatClock(
+                                                                                            scheduled,
+                                                                                        )}
+                                                                                    </p>
+                                                                                </div>
+
+                                                                                <div className="rounded-xl bg-slate-50 px-3 py-2.5">
+                                                                                    <p className="text-[7px] font-extrabold uppercase tracking-wider text-slate-300">
+                                                                                        Delay
+                                                                                    </p>
+
+                                                                                    <p
+                                                                                        className={`mt-1 text-[11px] font-extrabold ${delayClass(
+                                                                                            delay,
+                                                                                        )}`}
+                                                                                    >
+                                                                                        {formatDelay(
+                                                                                            delay,
+                                                                                        )}
+                                                                                    </p>
+                                                                                </div>
+
+                                                                                <div className="rounded-xl bg-slate-50 px-3 py-2.5">
+                                                                                    <p className="text-[7px] font-extrabold uppercase tracking-wider text-slate-300">
+                                                                                        Status
+                                                                                    </p>
+
+                                                                                    <p className="mt-1 text-[11px] font-bold text-slate-500">
+                                                                                        {item.isCurrent
+                                                                                            ? "Train here"
+                                                                                            : prediction
+                                                                                              ? "Predicted"
+                                                                                              : "Scheduled"}
+                                                                                    </p>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            },
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        )}
+
+                                        {/* AI INSIGHT */}
+                                        <section className="slide-up overflow-hidden rounded-[30px] border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-blue-50 p-5 shadow-sm sm:p-6">
+                                            <div className="flex items-start gap-4">
+                                                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-100 text-xl text-indigo-600">
+                                                    ✦
+                                                </div>
+
+                                                <div className="min-w-0 flex-1">
+                                                    <p className="text-[9px] font-extrabold uppercase tracking-[.22em] text-indigo-600">
+                                                        AI prediction engine
+                                                    </p>
+
+                                                    <h3 className="mt-1 text-xl font-extrabold text-slate-800">
+                                                        Why this prediction?
+                                                    </h3>
+
+                                                    <div className="mt-4 rounded-2xl border border-indigo-100 bg-white p-4">
+                                                        <p className="text-sm leading-7 text-slate-600">
+                                                            {payload?.insight ||
+                                                                (currentDelay >
+                                                                5
+                                                                    ? `The train is currently ${Math.round(
+                                                                          currentDelay,
+                                                                      )} minutes late. RailSaathi evaluates the current delay and downstream operating conditions to estimate how much of that delay may propagate.`
+                                                                    : "The train is currently operating close to schedule. RailSaathi expects limited downstream delay variation based on the current operating state.")}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                                                <div className="rounded-2xl border border-indigo-100 bg-white p-4">
+                                                    <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">
+                                                        Current
+                                                    </p>
+
+                                                    <p
+                                                        className={`mt-2 text-lg font-extrabold ${delayClass(
+                                                            currentDelay,
+                                                        )}`}
+                                                    >
+                                                        {currentDelay >
+                                                        0
+                                                            ? "+"
+                                                            : ""}
+                                                        {Math.round(
+                                                            currentDelay,
+                                                        )}
+                                                        m
+                                                    </p>
+                                                </div>
+
+                                                <div className="rounded-2xl border border-indigo-100 bg-white p-4">
+                                                    <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">
+                                                        Expected change
+                                                    </p>
+
+                                                    <p
+                                                        className={`mt-2 text-lg font-extrabold ${delayClass(
+                                                            delayChange,
+                                                        )}`}
+                                                    >
+                                                        {delayChange >=
+                                                        0
+                                                            ? "+"
+                                                            : ""}
+                                                        {Math.round(
+                                                            delayChange,
+                                                        )}
+                                                        m
+                                                    </p>
+                                                </div>
+
+                                                <div className="rounded-2xl border border-indigo-100 bg-white p-4">
+                                                    <p className="text-[8px] font-bold uppercase tracking-widest text-slate-300">
+                                                        Confidence
+                                                    </p>
+
+                                                    <p className="mt-2 text-lg font-extrabold text-indigo-600">
+                                                        {payload?.model_confidence ??
+                                                            "—"}
+                                                        <span className="ml-1 text-xs font-normal text-slate-300">
+                                                            %
+                                                        </span>
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </section>
+
+                                        {/* DATA PIPELINE */}
+                                        <section className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm">
+                                            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                                                <div>
+                                                    <p className="text-[8px] font-extrabold uppercase tracking-[.22em] text-slate-300">
+                                                        RailSaathi data pipeline
+                                                    </p>
+
+                                                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[9px] font-bold text-slate-400">
+                                                        <span className="rounded-lg bg-slate-50 px-2 py-1">
+                                                            NTES
+                                                        </span>
+
+                                                        <span className="text-blue-500">
+                                                            →
+                                                        </span>
+
+                                                        <span className="rounded-lg bg-slate-50 px-2 py-1">
+                                                            Live State
+                                                        </span>
+
+                                                        <span className="text-blue-500">
+                                                            →
+                                                        </span>
+
+                                                        <span className="rounded-lg bg-indigo-50 px-2 py-1 text-indigo-500">
+                                                            ML Engine
+                                                        </span>
+
+                                                        <span className="text-blue-500">
+                                                            →
+                                                        </span>
+
+                                                        <span className="rounded-lg bg-cyan-50 px-2 py-1 text-cyan-600">
+                                                            ETA
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                <div className="text-left sm:text-right">
+                                                    <span
+                                                        className={`inline-flex rounded-full border px-3 py-1.5 text-[8px] font-extrabold ${sourceClass}`}
+                                                    >
+                                                        {
+                                                            sourceLabel
+                                                        }
+                                                    </span>
+
+                                                    {lastUpdated && (
+                                                        <p className="mt-2 text-[8px] text-slate-300">
+                                                            Last update{" "}
+                                                            {
+                                                                lastUpdated
+                                                            }
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </section>
+                                    </>
+                                )}
+                            </section>
+                        </div>
+
+                        {/* =================================================
+                            WEATHER FOOTER
+                        ================================================= */}
+
+                        <section className="mt-5 rounded-[28px] border border-sky-100 bg-white p-5 shadow-[0_14px_45px_rgba(43,76,120,.07)]">
+                            <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                                <div className="flex items-center gap-4">
+                                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-sky-50 text-2xl">
+                                        ☁️
+                                    </div>
+
+                                    <div>
+                                        <p className="text-[9px] font-extrabold uppercase tracking-[.2em] text-sky-600">
+                                            Weather intelligence
+                                        </p>
+
+                                        <h3 className="mt-1 text-sm font-black text-slate-800">
+                                            Weather details unavailable
+                                        </h3>
+
+                                        <p className="mt-1 text-xs text-slate-400">
+                                            Weather data is not connected to the current demo environment.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="grid flex-1 gap-2 sm:grid-cols-3 lg:max-w-[620px]">
+                                    <div className="rounded-2xl bg-slate-50 p-3">
+                                        <p className="text-[8px] font-black uppercase tracking-wider text-slate-300">
+                                            Temperature
+                                        </p>
+
+                                        <p className="mt-2 text-sm font-black text-slate-400">
+                                            —
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-2xl bg-slate-50 p-3">
+                                        <p className="text-[8px] font-black uppercase tracking-wider text-slate-300">
+                                            Rain
+                                        </p>
+
+                                        <p className="mt-2 text-sm font-black text-slate-400">
+                                            —
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-2xl bg-slate-50 p-3">
+                                        <p className="text-[8px] font-black uppercase tracking-wider text-slate-300">
+                                            Visibility
+                                        </p>
+
+                                        <p className="mt-2 text-sm font-black text-slate-400">
+                                            —
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="mt-4 rounded-xl border border-dashed border-sky-200 bg-sky-50/50 px-3 py-2.5 text-center text-[9px] font-bold text-sky-500">
+                                WEATHER DETAILS UNAVAILABLE
+                            </div>
+                        </section>
+                    </>
+                )}
+
+                {/* =================================================
+                    FOOTER
+                ================================================= */}
+
+                <footer className="px-2 py-6 text-center">
+                    <p className="text-[10px] font-bold tracking-wide text-slate-400">
+                        RAILSAATHI • Smarter Journeys • Safer Tomorrows
+                    </p>
+                </footer>
+            </div>
         </main>
     );
 }
