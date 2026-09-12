@@ -9,13 +9,13 @@ from backend.models.predictor import predictor
 from backend.models.schemas import ETAPrediction, LiveTrainState
 from backend.services.redis_service import RedisService
 from backend.services.ntes_service import NTESService
+from backend.data.demo_station_data import get_demo_station_data
 
 
 router = APIRouter(
     prefix="/eta",
     tags=["ETA"],
 )
-
 
 bearer_scheme = HTTPBearer()
 
@@ -33,13 +33,6 @@ def get_redis(request: Request) -> RedisService:
 # =============================================================
 
 def _today_ntes_date() -> str:
-    """
-    Return today's date in the format expected by NTES.
-
-    Example:
-        11-Sep-2026
-    """
-
     now = datetime.now(IST)
 
     months = [
@@ -65,19 +58,247 @@ def _today_ntes_date() -> str:
 
 
 # =============================================================
+# DEMO FALLBACK HELPERS
+# =============================================================
+
+def _get_demo_train(train_no: str):
+    """
+    Find a train in the explicit demo station data.
+    """
+
+    train_no = str(train_no).strip()
+
+    for station_code in ["RPH", "HWH"]:
+
+        demo_data = get_demo_station_data(
+            station_code
+        )
+
+        if not demo_data:
+            continue
+
+        for train in demo_data.get("trains", []):
+
+            if (
+                str(
+                    train.get("train_no", "")
+                ).strip()
+                == train_no
+            ):
+                return train
+
+    return None
+
+
+def _build_demo_route(
+    train_no: str,
+    date: str,
+):
+    """
+    Build a deterministic demo route when NTES is
+    unavailable.
+
+    The response is explicitly marked as DEMO_FALLBACK.
+    """
+
+    train = _get_demo_train(train_no)
+
+    if not train:
+        return None
+
+    source = (
+        str(
+            train.get("source") or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    destination = (
+        str(
+            train.get("destination") or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    source_name = (
+        train.get("source_name")
+        or source
+    )
+
+    destination_name = (
+        train.get("destination_name")
+        or destination
+    )
+
+    arrival_delay = int(
+        train.get("arrival_delay", 0)
+        or 0
+    )
+
+    departure_delay = int(
+        train.get("departure_delay", 0)
+        or 0
+    )
+
+    scheduled_arrival = (
+        train.get("scheduled_arrival")
+    )
+
+    scheduled_departure = (
+        train.get("scheduled_departure")
+    )
+
+    platform = train.get("platform")
+
+    # ---------------------------------------------------------
+    # Demo route
+    # ---------------------------------------------------------
+
+    route = [
+        {
+            "station_code": source,
+            "station_name": source_name,
+            "distance": 0,
+            "scheduled_arrival": None,
+            "scheduled_departure": scheduled_departure,
+            "actual_arrival": None,
+            "actual_departure": None,
+            "platform": platform,
+            "arrival_delay": arrival_delay,
+            "departure_delay": departure_delay,
+            "is_current": True,
+        },
+        {
+            "station_code": destination,
+            "station_name": destination_name,
+            "distance": 200,
+            "scheduled_arrival": scheduled_arrival,
+            "scheduled_departure": scheduled_arrival,
+            "actual_arrival": None,
+            "actual_departure": None,
+            "platform": None,
+            "arrival_delay": 0,
+            "departure_delay": 0,
+            "is_current": False,
+        },
+    ]
+
+    return {
+        "train_no": str(train_no),
+        "date": str(date),
+        "route": route,
+        "current_station": source,
+        "current_station_name": source_name,
+        "delay": departure_delay,
+        "yet_to_start": False,
+        "data_source": "DEMO_FALLBACK",
+        "demo": True,
+        "cached": False,
+        "generated_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+    }
+
+
+def _build_demo_status(
+    train_no: str,
+    date: str,
+):
+    """
+    Build deterministic demo live-status data.
+    """
+
+    train = _get_demo_train(train_no)
+
+    if not train:
+        return None
+
+    source = (
+        str(
+            train.get("source") or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    source_name = (
+        train.get("source_name")
+        or source
+    )
+
+    destination = (
+        str(
+            train.get("destination") or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    destination_name = (
+        train.get("destination_name")
+        or destination
+    )
+
+    delay = int(
+        train.get(
+            "departure_delay",
+            train.get(
+                "arrival_delay",
+                0,
+            ),
+        )
+        or 0
+    )
+
+    return {
+        "train_no": str(train_no),
+        "date": str(date),
+
+        "CPOS": (
+            f"{source_name} "
+            f"({source})"
+        ),
+
+        "LSTN": source,
+
+        "STATUS": (
+            f"Train is currently at "
+            f"{source_name} ({source})."
+        ),
+
+        "STTS": (
+            f"Running {delay} minutes late."
+        ),
+
+        "train_name": train.get(
+            "train_name"
+        ),
+
+        "source": source,
+        "source_name": source_name,
+
+        "destination": destination,
+        "destination_name": destination_name,
+
+        "delay_minutes": delay,
+
+        "data_source": "DEMO_FALLBACK",
+        "demo": True,
+        "cached": False,
+
+        "generated_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+    }
+
+
+# =============================================================
 # CPOS CODE EXTRACTION
 # =============================================================
 
 def _extract_cpos_code(cpos: str) -> str:
-    """
-    Extract station code from NTES CPOS text.
-
-    Example:
-        Departed from KUMEDPUR(KDPR) at 07:51 11-Sep
-
-    Returns:
-        KDPR
-    """
 
     if not cpos:
         return ""
@@ -105,15 +326,6 @@ def _extract_cpos_name(
     cpos: str,
     code: str,
 ) -> str:
-    """
-    Extract station name from NTES CPOS text.
-
-    Example:
-        Departed from KUMEDPUR(KDPR) at 07:51 11-Sep
-
-    Returns:
-        KUMEDPUR
-    """
 
     if not cpos or not code:
         return ""
@@ -149,9 +361,6 @@ def _extract_cpos_name(
 def _route_codes(
     route: list[dict],
 ) -> list[str]:
-    """
-    Return normalized station codes from a route.
-    """
 
     return [
         (
@@ -172,11 +381,6 @@ def _route_codes(
 def _latest_visited_index(
     route: list[dict],
 ) -> int:
-    """
-    Find the latest scheduled station already visited.
-
-    NTES actual arrival/departure values are used.
-    """
 
     visited_indexes = []
 
@@ -206,9 +410,6 @@ def _find_route_station_index(
     route: list[dict],
     station_code: str,
 ) -> int:
-    """
-    Find a station index in the scheduled route.
-    """
 
     target = (
         station_code
@@ -238,12 +439,6 @@ def _find_route_station_index(
 def _first_unvisited_index(
     route: list[dict],
 ) -> int:
-    """
-    Find the first scheduled station that has not yet
-    recorded an actual arrival/departure.
-
-    Returns -1 if every station appears visited.
-    """
 
     for index, station in enumerate(route):
 
@@ -255,7 +450,10 @@ def _first_unvisited_index(
             "actual_departure"
         )
 
-        if not actual_arrival and not actual_departure:
+        if (
+            not actual_arrival
+            and not actual_departure
+        ):
             return index
 
     return -1
@@ -271,18 +469,6 @@ def _insert_live_position_into_route(
     live_name: str,
     route_data: dict,
 ) -> tuple[list[dict], str]:
-    """
-    Insert the live CPOS position into the scheduled route.
-
-    CPOS can represent a physical railway location that is
-    NOT itself a scheduled passenger stop.
-
-    Therefore RailCast creates a temporary live-position
-    station and places it immediately before the next
-    unvisited scheduled station.
-
-    No station is hardcoded.
-    """
 
     if not live_code:
         return route, ""
@@ -296,31 +482,16 @@ def _insert_live_position_into_route(
         normalized_route
     )
 
-    # =========================================================
-    # CPOS ALREADY EXISTS IN THE SCHEDULED ROUTE
-    # =========================================================
-
     if live_code in codes:
-
         return (
             normalized_route,
             live_code,
         )
 
-    # =========================================================
-    # DETERMINE WHERE THE TRAIN IS
-    # =========================================================
-    #
-    # Preferred approach:
-    #
-    #     Find the first station that has NOT been visited.
-    #
-    # The live CPOS lies somewhere before that station.
-    #
-    # =========================================================
-
-    next_unvisited_index = _first_unvisited_index(
-        normalized_route
+    next_unvisited_index = (
+        _first_unvisited_index(
+            normalized_route
+        )
     )
 
     if next_unvisited_index > 0:
@@ -331,24 +502,15 @@ def _insert_live_position_into_route(
 
     elif next_unvisited_index == 0:
 
-        # Train is before the first scheduled station.
         anchor_index = -1
 
     else:
 
-        # =====================================================
-        # FALLBACK 1:
-        # Latest station marked as visited
-        # =====================================================
-
-        anchor_index = _latest_visited_index(
-            normalized_route
+        anchor_index = (
+            _latest_visited_index(
+                normalized_route
+            )
         )
-
-    # =========================================================
-    # FALLBACK 2:
-    # route_data current station
-    # =========================================================
 
     if anchor_index < 0:
 
@@ -364,68 +526,40 @@ def _insert_live_position_into_route(
             .upper()
         )
 
-        route_current_index = _find_route_station_index(
-            normalized_route,
-            route_current,
+        route_current_index = (
+            _find_route_station_index(
+                normalized_route,
+                route_current,
+            )
         )
 
         if route_current_index >= 0:
-
             anchor_index = route_current_index
 
-    # =========================================================
-    # FINAL FALLBACK
-    # =========================================================
-    #
-    # If no reliable anchor exists, place the live position
-    # immediately before the first scheduled station.
-    #
-    # =========================================================
-
     if anchor_index < 0:
-
         insertion_index = 0
-
     else:
-
         insertion_index = anchor_index + 1
 
-    # =========================================================
-    # SAFETY:
-    # NEVER INSERT AFTER DESTINATION
-    # =========================================================
-
-    if insertion_index >= len(normalized_route):
-
-        # If the route is completely visited, place CPOS
-        # immediately before the final destination.
+    if insertion_index >= len(
+        normalized_route
+    ):
 
         if len(normalized_route) >= 2:
-
             insertion_index = (
                 len(normalized_route) - 1
             )
-
         else:
-
             return (
                 normalized_route,
                 "",
             )
-
-    # =========================================================
-    # CURRENT TIME
-    # =========================================================
 
     now = datetime.now(IST)
 
     current_time = now.strftime(
         "%H:%M"
     )
-
-    # =========================================================
-    # DISTANCE ANCHOR
-    # =========================================================
 
     if anchor_index >= 0:
 
@@ -459,14 +593,8 @@ def _insert_live_position_into_route(
     else:
 
         previous_distance = 0
-
         previous_arrival_delay = 0
-
         previous_departure_delay = 0
-
-    # =========================================================
-    # CREATE LIVE POSITION
-    # =========================================================
 
     live_station = {
         "station_code": live_code,
@@ -476,9 +604,6 @@ def _insert_live_position_into_route(
             or live_code
         ),
 
-        # CPOS is a physical location rather than a scheduled
-        # passenger stop, so use the nearest known route
-        # distance as an anchor.
         "distance": previous_distance,
 
         "scheduled_arrival": current_time,
@@ -499,10 +624,6 @@ def _insert_live_position_into_route(
 
         "is_live_position": True,
     }
-
-    # =========================================================
-    # INSERT LIVE POSITION
-    # =========================================================
 
     normalized_route.insert(
         insertion_index,
@@ -543,24 +664,11 @@ async def get_eta(
         .upper()
     )
 
-    # Keep train number as STRING throughout API/Pydantic.
-    #
-    # This preserves:
-    #
-    #     03030
-    #
-    # instead of:
-    #
-    #     3030
-
     train_no = (
         str(train_no)
         .strip()
         .zfill(5)
     )
-
-    # Numeric representation is used only where required
-    # by Redis / ML.
 
     try:
 
@@ -592,31 +700,54 @@ async def get_eta(
 
         except Exception:
 
-            # Redis is supplementary.
-            # ETA must still work without it.
-
             state = None
 
         # =====================================================
         # 2. GET DYNAMIC NTES ROUTE
+        #
+        # LIVE NTES -> DEMO FALLBACK
         # =====================================================
 
         today = _today_ntes_date()
 
-        route_data = (
-            ntes_service.get_train_route(
-                train_no,
-                today,
+        route_data = None
+        route_is_demo = False
+
+        try:
+
+            route_data = (
+                ntes_service.get_train_route(
+                    train_no,
+                    today,
+                )
             )
-        )
+
+        except Exception as route_error:
+
+            print(
+                "RAILCAST ETA NTES ROUTE ERROR:",
+                str(route_error),
+            )
+
+            route_data = (
+                _build_demo_route(
+                    train_no,
+                    today,
+                )
+            )
+
+            route_is_demo = (
+                route_data is not None
+            )
 
         if not route_data:
 
             raise HTTPException(
-                status_code=502,
+                status_code=503,
                 detail=(
-                    "Unable to retrieve train "
-                    "route from NTES."
+                    "NTES route is unavailable "
+                    "and no demo route exists "
+                    f"for train {train_no}."
                 ),
             )
 
@@ -628,16 +759,20 @@ async def get_eta(
         if len(dynamic_route) < 2:
 
             raise HTTPException(
-                status_code=502,
+                status_code=503,
                 detail=(
-                    "NTES returned an invalid "
-                    "train route."
+                    "RailCast could not build "
+                    "a usable train route."
                 ),
             )
 
         # =====================================================
         # 3. GET DETAILED NTES STATUS
+        #
+        # LIVE NTES -> DEMO FALLBACK
         # =====================================================
+
+        status_data = {}
 
         try:
 
@@ -648,12 +783,50 @@ async def get_eta(
                 )
             )
 
-        except Exception:
+        except Exception as status_error:
 
-            status_data = {}
+            print(
+                "RAILCAST ETA NTES STATUS ERROR:",
+                str(status_error),
+            )
+
+            demo_status = (
+                _build_demo_status(
+                    train_no,
+                    today,
+                )
+            )
+
+            if demo_status:
+
+                status_data = demo_status
+
+            else:
+
+                status_data = {}
 
         # =====================================================
-        # 4. EXTRACT CPOS
+        # 4. SOURCE FLAG
+        # =====================================================
+
+        using_demo = (
+            route_is_demo
+            or status_data.get(
+                "demo",
+                False,
+            )
+        )
+
+        if using_demo:
+
+            route_data["data_source"] = (
+                "DEMO_FALLBACK"
+            )
+
+            route_data["demo"] = True
+
+        # =====================================================
+        # 5. EXTRACT CPOS
         # =====================================================
 
         cpos_text = (
@@ -681,11 +854,8 @@ async def get_eta(
         )
 
         # =====================================================
-        # 5. DETERMINE ACTUAL CURRENT POSITION
+        # 6. CURRENT POSITION
         # =====================================================
-
-        # NTES CPOS has highest priority because it represents
-        # the live physical position.
 
         current_station = (
             cpos_code
@@ -719,7 +889,7 @@ async def get_eta(
         )
 
         # =====================================================
-        # 6. SOURCE / DESTINATION
+        # 7. SOURCE / DESTINATION
         # =====================================================
 
         destination_code = (
@@ -735,7 +905,7 @@ async def get_eta(
         )
 
         # =====================================================
-        # 7. TRAIN START STATUS
+        # 8. START STATUS
         # =====================================================
 
         train_yet_to_start = bool(
@@ -746,29 +916,27 @@ async def get_eta(
         )
 
         # =====================================================
-        # 8. CURRENT DELAY
+        # 9. CURRENT DELAY
         # =====================================================
-
-        # NTES is the source of truth.
 
         ntes_delay = float(
             route_data.get(
                 "delay",
-                0,
+                status_data.get(
+                    "delay_minutes",
+                    0,
+                ),
             )
             or 0
         )
 
         if train_yet_to_start:
-
             current_delay = 0.0
-
         else:
-
             current_delay = ntes_delay
 
         # =====================================================
-        # 9. REDIS SUPPLEMENTARY FEATURES
+        # 10. REDIS FEATURES
         # =====================================================
 
         if state is not None:
@@ -804,7 +972,7 @@ async def get_eta(
             )
 
         # =====================================================
-        # 10. BUILD PREDICTION ROUTE
+        # 11. BUILD PREDICTION ROUTE
         # =====================================================
 
         prediction_route = (
@@ -821,7 +989,7 @@ async def get_eta(
 
         # =====================================================
         # CASE A:
-        # Requested station exists in scheduled route
+        # Requested station exists
         # =====================================================
 
         if station_code in route_codes:
@@ -832,7 +1000,7 @@ async def get_eta(
 
         # =====================================================
         # CASE B:
-        # Requested station is current NTES CPOS
+        # Requested station is CPOS
         # =====================================================
 
         elif (
@@ -863,26 +1031,22 @@ async def get_eta(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "NTES reported the live "
-                        "station position, but "
                         "RailCast could not "
-                        "place that position "
-                        "relative to the "
-                        "scheduled route."
+                        "place the live "
+                        "station position."
                     ),
                 )
 
             current_station = cpos_code
 
             if cpos_name:
-
                 current_station_name = (
                     cpos_name
                 )
 
         # =====================================================
         # CASE C:
-        # Requested station is stale but NTES has CPOS
+        # Requested station is stale
         # =====================================================
 
         else:
@@ -912,25 +1076,17 @@ async def get_eta(
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            "NTES reported the "
-                            "train's current "
-                            "physical position, "
-                            "but RailCast could "
-                            "not place that "
-                            "position relative "
-                            "to the scheduled "
-                            "route."
+                            "RailCast could not "
+                            "place the train's "
+                            "current position."
                         ),
                     )
-
-                # Trust the live NTES position.
 
                 current_station = (
                     cpos_code
                 )
 
                 if cpos_name:
-
                     current_station_name = (
                         cpos_name
                     )
@@ -943,15 +1099,12 @@ async def get_eta(
                         f"Station {station_code} "
                         f"is not present in "
                         f"train {train_no}'s "
-                        f"NTES route and "
-                        f"NTES did not "
-                        f"provide a current "
-                        f"CPOS."
+                        f"route."
                     ),
                 )
 
         # =====================================================
-        # 11. JOURNEY COMPLETED
+        # 12. JOURNEY COMPLETED
         # =====================================================
 
         if (
@@ -986,7 +1139,7 @@ async def get_eta(
             )
 
         # =====================================================
-        # 12. RUN RAILCAST PREDICTOR
+        # 13. RAILCAST ML PREDICTION
         # =====================================================
 
         predictions = predictor.predict(
@@ -1004,15 +1157,13 @@ async def get_eta(
 
             trains_ahead=trains_ahead,
 
-            # Predictor uses numeric train number.
-
             train_no=train_no_int,
 
             route=prediction_route,
         )
 
         # =====================================================
-        # 13. MODEL CONFIDENCE
+        # 14. MODEL CONFIDENCE
         # =====================================================
 
         if predictions:
@@ -1044,7 +1195,7 @@ async def get_eta(
             model_conf = 55.0
 
         # =====================================================
-        # 14. ML INSIGHT
+        # 15. ML INSIGHT
         # =====================================================
 
         if train_yet_to_start:
@@ -1093,7 +1244,7 @@ async def get_eta(
             )
 
         # =====================================================
-        # 15. ADD CPOS CONTEXT
+        # 16. CPOS CONTEXT
         # =====================================================
 
         if (
@@ -1109,7 +1260,19 @@ async def get_eta(
             )
 
         # =====================================================
-        # 16. FINAL RESPONSE
+        # 17. DEMO CONTEXT
+        # =====================================================
+
+        if using_demo:
+
+            insight = (
+                "Demo fallback is active because "
+                "live NTES data is unavailable. "
+                + insight
+            )
+
+        # =====================================================
+        # 18. FINAL RESPONSE
         # =====================================================
 
         return ETAPrediction(
@@ -1118,8 +1281,6 @@ async def get_eta(
             generated_at=datetime.now(
                 timezone.utc
             ),
-
-            # Actual live position from NTES.
 
             current_station=(
                 current_station
@@ -1162,6 +1323,11 @@ async def get_eta(
         ) from exc
 
     except Exception as exc:
+
+        print(
+            "RAILCAST ETA ERROR:",
+            str(exc),
+        )
 
         raise HTTPException(
             status_code=502,
