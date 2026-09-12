@@ -623,7 +623,7 @@ export default function PassengerView() {
             );
 
             // -------------------------------------------------
-            // RAILDRISHRI ETA
+            // RAILDRISHTI ETA
             // -------------------------------------------------
 
             const eta =
@@ -633,7 +633,7 @@ export default function PassengerView() {
                 );
 
             console.log(
-                "RailDrishri ETA:",
+                "RailDrishti ETA:",
                 eta
             );
 
@@ -1120,7 +1120,7 @@ export default function PassengerView() {
             ? "Delay is expected to increase further."
             : finalPredictionDelay <
                 currentDelay - 2
-                ? "RailDrishri expects the delay to reduce ahead."
+                ? "RailDrishti expects the delay to reduce ahead."
                 : "Delay is expected to remain broadly stable.";
 
     const statusExplanation =
@@ -1170,23 +1170,23 @@ export default function PassengerView() {
             ? delayChange > 2
                 ? `The train is already running ${Math.round(
                     currentDelay
-                )} min late. RailDrishri expects part of this delay to propagate through downstream segments, increasing the projected delay by around ${Math.round(
+                )} min late. RailDrishti expects part of this delay to propagate through downstream segments, increasing the projected delay by around ${Math.round(
                     delayChange
                 )} min.`
                 : delayChange < -2
                     ? `The train is currently ${Math.round(
                         currentDelay
-                    )} min late, but RailDrishri expects the delay to recover by around ${Math.round(
+                    )} min late, but RailDrishti expects the delay to recover by around ${Math.round(
                         Math.abs(delayChange)
                     )} min across the remaining route.`
                     : `The train is currently ${Math.round(
                         currentDelay
-                    )} min late. RailDrishri expects the delay to remain broadly stable across the remaining route.`
+                    )} min late. RailDrishti expects the delay to remain broadly stable across the remaining route.`
             : currentDelay < -2
                 ? `The train is currently running around ${Math.round(
                     Math.abs(currentDelay)
-                )} min early. RailDrishri expects the schedule advantage to gradually normalize downstream.`
-                : "The train is currently close to schedule, so RailDrishri expects only limited downstream delay variation.";
+                )} min early. RailDrishti expects the schedule advantage to gradually normalize downstream.`
+                : "The train is currently close to schedule, so RailDrishti expects only limited downstream delay variation.";
 
     const mlFactors = [
         currentDelay !== 0
@@ -1244,7 +1244,7 @@ export default function PassengerView() {
                     <div>
 
                         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-blue-400">
-                            RailDrishri
+                            RailDrishti
                         </p>
 
                         <h1 className="mt-1 text-xl font-semibold">
@@ -1557,7 +1557,7 @@ export default function PassengerView() {
                         ) : loadingTrain ? (
 
                             <p className="mt-3 text-sm text-white/40">
-                                Fetching live train status and RailDrishri prediction…
+                                Fetching live train status and RailDrishti prediction…
                             </p>
 
                         ) : selectedTrainStatus ? (
@@ -1817,7 +1817,7 @@ export default function PassengerView() {
                                         <div className="mt-5 rounded-2xl bg-[#0f0f18] p-4">
 
                                             <p className="text-sm text-white/40">
-                                                RailDrishri prediction for the next station is currently unavailable.
+                                                RailDrishti prediction for the next station is currently unavailable.
                                             </p>
 
                                         </div>
@@ -1943,7 +1943,7 @@ export default function PassengerView() {
                                 <div>
 
                                     <p className="text-xs uppercase tracking-[0.2em] text-white/40">
-                                        RailDrishri status intelligence
+                                        RailDrishti status intelligence
                                     </p>
 
                                     <h2 className="mt-2 text-xl font-semibold text-white">
@@ -2097,7 +2097,7 @@ export default function PassengerView() {
                                 </p>
 
                                 <h2 className="mt-2 text-xl font-semibold text-white">
-                                    RailDrishri ML reasoning
+                                    RailDrishti ML reasoning
                                 </h2>
 
                             </div>
