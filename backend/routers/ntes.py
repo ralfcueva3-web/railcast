@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from datetime import datetime, timezone
 import json
 
 from backend.services.ntes_service import NTESService
@@ -45,6 +46,288 @@ def station_cache_key(
 
 
 # =========================================================
+# DEMO HELPERS
+# =========================================================
+
+def get_demo_train(
+    train_no: str,
+):
+    """
+    Find a train inside the explicit demo station data.
+    """
+
+    train_no = str(train_no).strip()
+
+    for station_code in ["RPH", "HWH"]:
+
+        demo_data = get_demo_station_data(
+            station_code
+        )
+
+        if not demo_data:
+            continue
+
+        for train in demo_data.get(
+            "trains",
+            [],
+        ):
+
+            if str(
+                train.get("train_no", "")
+            ).strip() == train_no:
+
+                return train
+
+    return None
+
+
+def build_demo_train_status(
+    train_no: str,
+    date: str,
+):
+    """
+    Build an explicitly labelled demo NTES-style
+    train status response.
+    """
+
+    train = get_demo_train(
+        train_no
+    )
+
+    if not train:
+        return None
+
+    source = (
+        str(
+            train.get("source")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    destination = (
+        str(
+            train.get("destination")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    source_name = (
+        train.get("source_name")
+        or source
+    )
+
+    destination_name = (
+        train.get("destination_name")
+        or destination
+    )
+
+    delay = int(
+        train.get(
+            "departure_delay",
+            train.get(
+                "arrival_delay",
+                0,
+            ),
+        )
+        or 0
+    )
+
+    return {
+        "train_no": str(train_no),
+        "date": str(date),
+
+        "CPOS": (
+            f"{source_name} "
+            f"({source})"
+        ),
+
+        "LSTN": source,
+
+        "STATUS": (
+            f"Train is currently at "
+            f"{source_name} ({source})."
+        ),
+
+        "STTS": (
+            f"Running {delay} minutes "
+            f"late."
+        ),
+
+        "train_name": train.get(
+            "train_name"
+        ),
+
+        "source": source,
+        "source_name": source_name,
+
+        "destination": destination,
+        "destination_name": destination_name,
+
+        "delay_minutes": delay,
+
+        "data_source": "DEMO_FALLBACK",
+        "demo": True,
+        "cached": False,
+
+        "generated_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+    }
+
+
+def build_demo_train_route(
+    train_no: str,
+    date: str,
+):
+    """
+    Build a small deterministic demo route from
+    the explicit demo station-board data.
+
+    This is intentionally labelled DEMO_FALLBACK.
+    """
+
+    train = get_demo_train(
+        train_no
+    )
+
+    if not train:
+        return None
+
+    source = (
+        str(
+            train.get("source")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    destination = (
+        str(
+            train.get("destination")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+    source_name = (
+        train.get("source_name")
+        or source
+    )
+
+    destination_name = (
+        train.get("destination_name")
+        or destination
+    )
+
+    arrival_time = train.get(
+        "scheduled_arrival"
+    )
+
+    departure_time = train.get(
+        "scheduled_departure"
+    )
+
+    arrival_delay = int(
+        train.get(
+            "arrival_delay",
+            0,
+        )
+        or 0
+    )
+
+    departure_delay = int(
+        train.get(
+            "departure_delay",
+            0,
+        )
+        or 0
+    )
+
+    # -----------------------------------------------------
+    # Avoid duplicate route stations.
+    # -----------------------------------------------------
+
+    if source == destination:
+
+        route = [
+            {
+                "station_code": source,
+                "station_name": source_name,
+                "distance": 0,
+                "scheduled_arrival": arrival_time,
+                "scheduled_departure": departure_time,
+                "actual_arrival": None,
+                "actual_departure": None,
+                "platform": train.get(
+                    "platform"
+                ),
+                "arrival_delay": arrival_delay,
+                "departure_delay": departure_delay,
+                "is_current": True,
+            }
+        ]
+
+    else:
+
+        route = [
+            {
+                "station_code": source,
+                "station_name": source_name,
+                "distance": 0,
+                "scheduled_arrival": None,
+                "scheduled_departure": departure_time,
+                "actual_arrival": None,
+                "actual_departure": None,
+                "platform": train.get(
+                    "platform"
+                ),
+                "arrival_delay": 0,
+                "departure_delay": departure_delay,
+                "is_current": True,
+            },
+            {
+                "station_code": destination,
+                "station_name": destination_name,
+                "distance": 200,
+                "scheduled_arrival": arrival_time,
+                "scheduled_departure": arrival_time,
+                "actual_arrival": None,
+                "actual_departure": None,
+                "platform": None,
+                "arrival_delay": 0,
+                "departure_delay": 0,
+                "is_current": False,
+            },
+        ]
+
+    return {
+        "train_no": str(train_no),
+        "date": str(date),
+
+        "route": route,
+
+        "current_station": source,
+        "current_station_name": source_name,
+
+        "yet_to_start": False,
+
+        "data_source": "DEMO_FALLBACK",
+        "demo": True,
+        "cached": False,
+
+        "generated_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+    }
+
+
+# =========================================================
 # STATION LIVE TRAINS
 # =========================================================
 
@@ -55,18 +338,6 @@ async def get_station_trains(
         bearer_scheme
     ),
 ):
-    """
-    Station live-board endpoint.
-
-    Priority:
-
-        1. NTES live
-        2. Redis cache
-        3. Explicit demo fallback
-
-    data_source tells the frontend which source
-    produced the response.
-    """
 
     station_code = (
         str(station_code)
@@ -101,10 +372,6 @@ async def get_station_trains(
         data["data_source"] = "NTES_LIVE"
         data["cached"] = False
         data["demo"] = False
-
-        # -------------------------------------------------
-        # Save successful NTES response to Redis.
-        # -------------------------------------------------
 
         try:
 
@@ -176,11 +443,6 @@ async def get_station_trains(
 
             return cached_data
 
-        print(
-            "RAILCAST STATION CACHE MISS:",
-            station_code,
-        )
-
     except Exception as cache_error:
 
         print(
@@ -204,10 +466,6 @@ async def get_station_trains(
         )
 
         return demo_data
-
-    # =====================================================
-    # NOTHING AVAILABLE
-    # =====================================================
 
     raise HTTPException(
         status_code=503,
@@ -235,9 +493,6 @@ async def get_train_status(
         bearer_scheme
     ),
 ):
-    """
-    Return detailed NTES live status for a train.
-    """
 
     train_no = str(
         train_no
@@ -259,27 +514,58 @@ async def get_train_status(
             detail="Date is required.",
         )
 
+    # =====================================================
+    # 1. TRY LIVE NTES
+    # =====================================================
+
     try:
 
-        return ntes_service.get_train_status(
+        data = ntes_service.get_train_status(
             train_no,
             date,
         )
 
+        if isinstance(data, dict):
+
+            data["data_source"] = "NTES_LIVE"
+            data["cached"] = False
+            data["demo"] = False
+
+        return data
+
     except Exception as error:
 
         print(
-            "RAILCAST NTES TRAIN STATUS ROUTER ERROR:",
+            "RAILCAST NTES TRAIN STATUS ERROR:",
             str(error),
         )
 
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "NTES train status request failed. "
-                f"{str(error)}"
-            ),
-        ) from error
+    # =====================================================
+    # 2. DEMO FALLBACK
+    # =====================================================
+
+    demo_status = build_demo_train_status(
+        train_no,
+        date,
+    )
+
+    if demo_status:
+
+        print(
+            "RAILCAST DEMO TRAIN STATUS:",
+            train_no,
+        )
+
+        return demo_status
+
+    raise HTTPException(
+        status_code=502,
+        detail=(
+            "NTES train status request failed "
+            "and no demo data exists for train "
+            f"{train_no}."
+        ),
+    )
 
 
 # =========================================================
@@ -294,9 +580,6 @@ async def get_train_route(
         bearer_scheme
     ),
 ):
-    """
-    Return normalized dynamic NTES route.
-    """
 
     train_no = str(
         train_no
@@ -318,24 +601,55 @@ async def get_train_route(
             detail="Date is required.",
         )
 
+    # =====================================================
+    # 1. TRY LIVE NTES
+    # =====================================================
+
     try:
 
-        return ntes_service.get_train_route(
+        data = ntes_service.get_train_route(
             train_no,
             date,
         )
 
+        if isinstance(data, dict):
+
+            data["data_source"] = "NTES_LIVE"
+            data["cached"] = False
+            data["demo"] = False
+
+        return data
+
     except Exception as error:
 
         print(
-            "RAILCAST NTES ROUTE ROUTER ERROR:",
+            "RAILCAST NTES ROUTE ERROR:",
             str(error),
         )
 
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "NTES route request failed. "
-                f"{str(error)}"
-            ),
-        ) from error
+    # =====================================================
+    # 2. DEMO FALLBACK
+    # =====================================================
+
+    demo_route = build_demo_train_route(
+        train_no,
+        date,
+    )
+
+    if demo_route:
+
+        print(
+            "RAILCAST DEMO TRAIN ROUTE:",
+            train_no,
+        )
+
+        return demo_route
+
+    raise HTTPException(
+        status_code=502,
+        detail=(
+            "NTES route request failed "
+            "and no demo route exists for train "
+            f"{train_no}."
+        ),
+    )
